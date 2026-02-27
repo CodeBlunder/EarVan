@@ -44,9 +44,9 @@ Switch between intelligent sound modes depending on your surroundings:
 -  Prevents loud audio from playing through speakers  
 ---
 
-## 📦 Installation & Setup  
+## Installation & Setup  
 
-### 1️⃣ Clone the Repository  
+### Clone the Repository  
 
 ```bash
 git clone https://github.com/your-username/earvan.git
