@@ -56,10 +56,13 @@ cd earvan
 
 npm install
 
+# Configure Environment Variables
 PORT=5000
 MONGO_URI=your_mongodb_connection_string
 
+# Run the application
 npm run dev
+
 
 npm run build
 npm start
