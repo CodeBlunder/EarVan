@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { User, AppView } from './types';
+import { User, AppView, HearingProfile } from './types';
 import { authService } from './services/authService';
 import { AuthPage } from './pages/AuthPage';
 import { SplashPage } from './pages/SplashPage';
 import { PermissionPage } from './pages/PermissionPage';
 import { SetupProfilePage } from './pages/SetupProfilePage';
 import { DashboardPage } from './pages/DashboardPage';
+import { HearingTestPage } from './pages/HearingTestPage';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<AppView>('AUTH');
+  const [draftProfile, setDraftProfile] = useState<HearingProfile | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -17,12 +19,7 @@ export default function App() {
     const user = authService.getCurrentUser();
     if (user) {
       setCurrentUser(user);
-      // Determine where to send them based on profile existence
-      if (user.profile) {
-          setCurrentView('SPLASH'); // Or direct to HOME if preferred, but SPLASH is nice welcome
-      } else {
-          setCurrentView('SPLASH');
-      }
+      setCurrentView('SPLASH');
     }
     setIsLoading(false);
   }, []);
@@ -39,29 +36,52 @@ export default function App() {
   };
 
   const handleSplashComplete = () => {
-    // If we have permissions already? The permission page handles checking.
-    // If we have a profile, go to Home, else Setup.
-    // Ideally Permission page comes first.
     setCurrentView('PERMISSIONS');
   };
 
   const handlePermissionsComplete = () => {
     if (currentUser?.profile) {
-        setCurrentView('HOME');
+      setCurrentView('HOME');
     } else {
-        setCurrentView('SETUP_PROFILE');
+      setCurrentView('SETUP_PROFILE');
     }
   };
 
   const handleProfileComplete = () => {
-      // Refresh user to get the profile data
-      const updatedUser = authService.getCurrentUser();
-      setCurrentUser(updatedUser);
-      setCurrentView('HOME');
+    // Refresh user to get the profile data
+    const updatedUser = authService.getCurrentUser();
+    setCurrentUser(updatedUser);
+    setDraftProfile(undefined);
+    setCurrentView('HOME');
   };
   
   const handleEditProfile = () => {
+    setDraftProfile(currentUser?.profile);
+    setCurrentView('SETUP_PROFILE');
+  };
+
+  const handleStartHearingTest = () => {
+    setCurrentView('HEARING_TEST');
+  };
+
+  const handleHearingTestComplete = () => {
+    const updatedUser = authService.getCurrentUser();
+    setCurrentUser(updatedUser);
+    setDraftProfile(undefined);
+    setCurrentView('HOME');
+  };
+
+  const handleHearingTestCancel = () => {
+    if (currentUser?.profile) {
+      setCurrentView('HOME');
+    } else {
       setCurrentView('SETUP_PROFILE');
+    }
+  };
+
+  const handleHearingTestManualEdit = (profile: HearingProfile) => {
+    setDraftProfile(profile);
+    setCurrentView('SETUP_PROFILE');
   };
 
   if (isLoading) {
@@ -91,12 +111,32 @@ export default function App() {
 
       {/* Route: Setup Profile */}
       {currentView === 'SETUP_PROFILE' && currentUser && (
-        <SetupProfilePage user={currentUser} onComplete={handleProfileComplete} />
+        <SetupProfilePage 
+          user={currentUser} 
+          onComplete={handleProfileComplete} 
+          onStartHearingTest={handleStartHearingTest}
+          initialProfile={draftProfile}
+        />
+      )}
+
+      {/* Route: Interactive Hearing Test */}
+      {currentView === 'HEARING_TEST' && currentUser && (
+        <HearingTestPage 
+          user={currentUser}
+          onComplete={handleHearingTestComplete}
+          onCancel={handleHearingTestCancel}
+          onManualEdit={handleHearingTestManualEdit}
+        />
       )}
 
       {/* Route: Home/Dashboard */}
       {currentView === 'HOME' && currentUser && (
-        <DashboardPage user={currentUser} onLogout={handleLogout} onEditProfile={handleEditProfile} />
+        <DashboardPage 
+          user={currentUser} 
+          onLogout={handleLogout} 
+          onEditProfile={handleEditProfile} 
+          onRetestHearing={handleStartHearingTest}
+        />
       )}
     </div>
   );

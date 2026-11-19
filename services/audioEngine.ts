@@ -7,6 +7,9 @@ export class AudioEngine {
   // Nodes
   private micSource: MediaStreamAudioSourceNode | null = null;
   private testSource: AudioBufferSourceNode | null = null;
+  private toneOsc: OscillatorNode | null = null;
+  private toneGain: GainNode | null = null;
+  private preGainNode: GainNode | null = null;
   private gainNode: GainNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private analyser: AnalyserNode | null = null;
@@ -15,8 +18,12 @@ export class AudioEngine {
   // State
   private currentProfile: HearingProfile | null = null;
   private currentMode: EnvironmentMode = 'QUIET';
+  private isEnabled: boolean = true;
   private isBypassed: boolean = false;
   private isTesting: boolean = false;
+  private masterVolume: number = 1.0;
+  private micSensitivity: number = 1.2;
+  private selectedDeviceId: string | null = null;
   
   private readonly frequencies = [500, 1000, 2000, 4000, 8000];
 
@@ -26,6 +33,8 @@ export class AudioEngine {
     this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
     
     // Core Processing Chain Nodes
+    this.preGainNode = this.context.createGain();
+    this.preGainNode.gain.value = this.micSensitivity;
     this.gainNode = this.context.createGain();
     this.compressor = this.context.createDynamicsCompressor();
     this.analyser = this.context.createAnalyser();
@@ -66,12 +75,18 @@ export class AudioEngine {
     }
 
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      const audioConstraints: any = {
         echoCancellation: false,
-        noiseSuppression: false, // We want to process raw audio if possible
-        autoGainControl: false,
+        noiseSuppression: false,
+        autoGainControl: true, // Auto Gain Control helps capture distant speech
         latency: 0
-      } as any });
+      };
+
+      if (this.selectedDeviceId) {
+        audioConstraints.deviceId = { exact: this.selectedDeviceId };
+      }
+
+      this.stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
       this.micSource = this.context.createMediaStreamSource(this.stream);
       this.connectChain(this.micSource);
@@ -134,12 +149,17 @@ export class AudioEngine {
 
     // Disconnect everything first to be safe
     sourceNode.disconnect();
+    if (this.preGainNode) this.preGainNode.disconnect();
     this.filters.forEach(f => f.disconnect());
     this.compressor!.disconnect();
     this.gainNode!.disconnect();
     this.analyser!.disconnect();
 
-    let currentNode = sourceNode;
+    // 0. Pre-Gain Sensitivity Booster (for picking up distant room audio)
+    if (this.preGainNode) {
+      sourceNode.connect(this.preGainNode);
+    }
+    let currentNode: AudioNode = this.preGainNode || sourceNode;
 
     // 1. Filter Chain
     this.filters.forEach(filter => {
@@ -160,6 +180,37 @@ export class AudioEngine {
     this.analyser!.connect(this.context.destination);
   }
 
+  public async setAudioInputDevice(deviceId: string): Promise<void> {
+    this.selectedDeviceId = deviceId;
+    if (this.stream) {
+      this.stream.getTracks().forEach(t => t.stop());
+    }
+    if (this.context) {
+      await this.useMicrophone();
+    }
+  }
+
+  public getSelectedDeviceId(): string | null {
+    return this.selectedDeviceId;
+  }
+
+  public async getAvailableInputDevices(): Promise<MediaDeviceInfo[]> {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter(d => d.kind === 'audioinput');
+    } catch (e) {
+      return [];
+    }
+  }
+
+  public setMicSensitivity(gain: number) {
+    this.micSensitivity = Math.max(0.5, Math.min(gain, 3.0));
+    if (this.preGainNode && this.context) {
+      this.preGainNode.gain.setTargetAtTime(this.micSensitivity, this.context.currentTime, 0.05);
+    }
+  }
+
   public setProfile(profile: HearingProfile) {
     this.currentProfile = profile;
     this.applySettings();
@@ -170,9 +221,40 @@ export class AudioEngine {
     this.applySettings();
   }
 
+  public setEnabled(enabled: boolean) {
+    this.isEnabled = enabled;
+    this.isBypassed = !enabled;
+
+    if (!this.context || !this.gainNode) return;
+
+    if (!enabled) {
+      // Immediate, absolute silence to prevent any audio leakage or feedback
+      try {
+        this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
+        this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, this.context.currentTime);
+        this.gainNode.gain.linearRampToValueAtTime(0, this.context.currentTime + 0.03);
+      } catch (e) {}
+
+      // Stop any test audio if it was running
+      if (this.testSource) {
+        try { this.testSource.stop(); } catch(e) {}
+        this.testSource = null;
+        this.isTesting = false;
+      }
+      this.stopTone();
+    } else {
+      // Restore user's configured master volume smoothly
+      try {
+        this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
+        this.gainNode.gain.setValueAtTime(0, this.context.currentTime);
+        this.gainNode.gain.linearRampToValueAtTime(this.masterVolume, this.context.currentTime + 0.08);
+      } catch (e) {}
+      this.applySettings();
+    }
+  }
+
   public setBypass(bypass: boolean) {
-    this.isBypassed = bypass;
-    this.applySettings();
+    this.setEnabled(!bypass);
   }
 
   private applySettings() {
@@ -221,8 +303,12 @@ export class AudioEngine {
   }
 
   public setMasterVolume(value: number) {
-    if (this.gainNode && this.context) {
-      this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.1);
+    this.masterVolume = value;
+    if (this.gainNode && this.context && this.isEnabled) {
+      try {
+        this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
+        this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
+      } catch (e) {}
     }
   }
 
@@ -234,7 +320,82 @@ export class AudioEngine {
     return !!this.context && this.context.state === 'running';
   }
 
+  public async ensureContext(): Promise<AudioContext> {
+    if (!this.context) {
+      this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    if (this.context.state === 'suspended') {
+      await this.context.resume();
+    }
+    return this.context;
+  }
+
+  public async startTone(frequency: number, initialVolume: number = 0.005): Promise<void> {
+    const ctx = await this.ensureContext();
+    this.stopTone();
+
+    // Temporarily disconnect mic so room noise isn't amplified during tone test
+    if (this.micSource) {
+      try {
+        this.micSource.disconnect();
+      } catch (e) {}
+    }
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(frequency, ctx.currentTime);
+
+    // Smooth entry to prevent clicking
+    const safeInitial = Math.max(initialVolume, 0.0001);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(safeInitial, ctx.currentTime + 0.05);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    this.toneOsc = osc;
+    this.toneGain = gain;
+  }
+
+  public setToneVolume(volume: number): void {
+    if (this.toneGain && this.context) {
+      const safeVolume = Math.min(Math.max(volume, 0.0001), 0.6); // Safety cap
+      this.toneGain.gain.setTargetAtTime(safeVolume, this.context.currentTime, 0.08);
+    }
+  }
+
+  public stopTone(): void {
+    if (this.toneGain && this.context) {
+      try {
+        this.toneGain.gain.setValueAtTime(this.toneGain.gain.value, this.context.currentTime);
+        this.toneGain.gain.exponentialRampToValueAtTime(0.0001, this.context.currentTime + 0.05);
+      } catch (e) {}
+    }
+    if (this.toneOsc) {
+      try {
+        const osc = this.toneOsc;
+        setTimeout(() => {
+          try {
+            osc.stop();
+            osc.disconnect();
+          } catch (e) {}
+        }, 60);
+      } catch (e) {}
+      this.toneOsc = null;
+    }
+    this.toneGain = null;
+  }
+
+  public async restoreMic(): Promise<void> {
+    this.stopTone();
+    await this.useMicrophone();
+  }
+
   public stop() {
+    this.stopTone();
     if (this.stream) {
       this.stream.getTracks().forEach(t => t.stop());
     }

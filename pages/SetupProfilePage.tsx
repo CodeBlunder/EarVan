@@ -4,22 +4,29 @@ import { Button } from '../components/Button';
 import { audioEngine } from '../services/audioEngine';
 import { authService } from '../services/authService';
 import { ThemeToggle } from '../components/ThemeToggle';
-import { Play, Sliders, CheckCircle2, Volume2 } from 'lucide-react';
+import { Play, Sliders, CheckCircle2, Volume2, Sparkles, Ear } from 'lucide-react';
 
 interface SetupProfilePageProps {
   user: User;
   onComplete: () => void;
+  onStartHearingTest?: () => void;
+  initialProfile?: HearingProfile;
 }
 
 const DEFAULT_PROFILE: HearingProfile = {
   eqBands: { 500: 0, 1000: 0, 2000: 0, 4000: 0, 8000: 0 }
 };
 
-export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({ user, onComplete }) => {
-  const [mode, setMode] = useState<'SELECT' | 'CUSTOMIZE'>('SELECT');
+export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({ 
+  user, 
+  onComplete,
+  onStartHearingTest,
+  initialProfile
+}) => {
+  const [mode, setMode] = useState<'SELECT' | 'CUSTOMIZE'>(initialProfile ? 'CUSTOMIZE' : 'SELECT');
   const [isAudioActive, setIsAudioActive] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [profile, setProfile] = useState<HearingProfile>(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<HearingProfile>(initialProfile || user.profile || DEFAULT_PROFILE);
   
   // Ref to track if we mounted audio
   const audioInitialized = useRef(false);
@@ -97,37 +104,70 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({ user, onComp
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* Quick Start Card */}
-            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xl hover:shadow-2xl transition-all group relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-primary-100 dark:bg-primary-900 rounded-full blur-3xl opacity-50 -mr-10 -mt-10"></div>
-              
-              <div className="w-16 h-16 bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                <Play className="w-8 h-8 fill-current" />
+          <div className="space-y-6">
+            {/* Interactive Hearing Test Card - Recommended */}
+            <div className="bg-gradient-to-r from-primary-500/10 via-sky-500/5 to-transparent dark:from-primary-950/40 dark:via-slate-800 dark:to-slate-800 bg-white dark:bg-slate-800 p-8 rounded-3xl border-2 border-primary-500/40 dark:border-primary-500/30 shadow-xl hover:shadow-2xl transition-all relative overflow-hidden">
+              <div className="absolute top-4 right-4">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-primary-600 text-white shadow-sm">
+                  <Sparkles className="w-3.5 h-3.5" /> Recommended
+                </span>
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Quick Start</h3>
-              <p className="text-slate-500 dark:text-slate-400 mb-8 h-12">
-                Use our balanced profile optimized for general conversation and clarity.
-              </p>
-              <Button onClick={handleQuickStart} fullWidth isLoading={isSaving}>
-                Use Default Profile
-              </Button>
+              
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex items-start gap-5">
+                  <div className="w-16 h-16 bg-primary-500 text-white rounded-2xl flex items-center justify-center shrink-0 shadow-lg shadow-primary-500/30">
+                    <Ear className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">
+                      Interactive Hearing Test
+                    </h3>
+                    <p className="text-slate-600 dark:text-slate-300 max-w-xl text-sm leading-relaxed">
+                      Take our 2-minute pure-tone audiometry test. Earvan will automatically measure your sensitivity across 5 frequency bands and calibrate your personalized EQ curve.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="md:shrink-0">
+                  <Button 
+                    onClick={onStartHearingTest || startCustomization} 
+                    size="lg"
+                    className="w-full md:w-auto font-bold px-8 shadow-lg shadow-primary-500/20"
+                  >
+                    Start Hearing Test
+                  </Button>
+                </div>
+              </div>
             </div>
 
-            {/* Customize Card */}
-            <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xl hover:shadow-2xl transition-all group relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-secondary-100 dark:bg-secondary-900 rounded-full blur-3xl opacity-50 -mr-10 -mt-10"></div>
-
-              <div className="w-16 h-16 bg-secondary-100 dark:bg-secondary-900/30 text-secondary-600 dark:text-secondary-400 rounded-2xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
-                <Sliders className="w-8 h-8" />
+            <div className="grid md:grid-cols-2 gap-6">
+              {/* Quick Start Card */}
+              <div className="bg-white dark:bg-slate-800 p-7 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-lg hover:shadow-xl transition-all group relative overflow-hidden">
+                <div className="w-14 h-14 bg-slate-100 dark:bg-slate-700/50 text-slate-700 dark:text-slate-300 rounded-2xl flex items-center justify-center mb-5 group-hover:scale-105 transition-transform">
+                  <Play className="w-7 h-7 fill-current" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Quick Start</h3>
+                <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
+                  Use our standard balanced profile optimized for everyday speech and conversation.
+                </p>
+                <Button variant="outline" onClick={handleQuickStart} fullWidth isLoading={isSaving}>
+                  Use Default Profile
+                </Button>
               </div>
-              <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Customize</h3>
-              <p className="text-slate-500 dark:text-slate-400 mb-8 h-12">
-                Fine-tune specific frequencies while listening to real-time audio feedback.
-              </p>
-              <Button variant="secondary" onClick={startCustomization} fullWidth>
-                Start Customization
-              </Button>
+
+              {/* Customize Card */}
+              <div className="bg-white dark:bg-slate-800 p-7 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-lg hover:shadow-xl transition-all group relative overflow-hidden">
+                <div className="w-14 h-14 bg-secondary-100 dark:bg-secondary-900/30 text-secondary-600 dark:text-secondary-400 rounded-2xl flex items-center justify-center mb-5 group-hover:scale-105 transition-transform">
+                  <Sliders className="w-7 h-7" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Manual Tuning</h3>
+                <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
+                  Manually adjust each frequency slider while listening to live audio feedback.
+                </p>
+                <Button variant="secondary" onClick={startCustomization} fullWidth>
+                  Open Slider Tuning
+                </Button>
+              </div>
             </div>
           </div>
         </div>

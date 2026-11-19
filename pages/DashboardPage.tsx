@@ -4,27 +4,37 @@ import { audioEngine } from '../services/audioEngine';
 import { authService } from '../services/authService';
 import { Button } from '../components/Button';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { LiveCaptions } from '../components/LiveCaptions';
+import { MicSelector } from '../components/MicSelector';
 import { 
   LogOut, Activity, Power, Mic, Waves, 
   MessageCircle, CloudRain, Zap, 
-  PlayCircle, StopCircle, Sliders, Ear
+  Sliders, Ear, Volume2, Sparkles,
+  Headphones, AlertTriangle, X
 } from 'lucide-react';
 
 interface DashboardPageProps {
   user: User;
   onLogout: () => void;
   onEditProfile: () => void;
+  onRetestHearing?: () => void;
 }
 
-export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, onEditProfile }) => {
+export const DashboardPage: React.FC<DashboardPageProps> = ({ 
+  user, 
+  onLogout, 
+  onEditProfile,
+  onRetestHearing 
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
   
   // State
   const [isAssistOn, setIsAssistOn] = useState(true);
   const [mode, setMode] = useState<EnvironmentMode>('QUIET');
-  const [isTestingAudio, setIsTestingAudio] = useState(false);
+  const [volume, setVolume] = useState<number>(1.0);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [disconnectAlert, setDisconnectAlert] = useState<string | null>(null);
 
   useEffect(() => {
     const initAudio = async () => {
@@ -42,7 +52,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
       
       // Initial State Sync
       audioEngine.setEnvironment(mode);
-      audioEngine.setBypass(!isAssistOn);
+      audioEngine.setEnabled(isAssistOn);
       setIsProcessing(true);
       startVisualizer();
     };
@@ -56,21 +66,35 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
     };
   }, [user]);
 
-  // Effect for Mode/Bypass changes
+  // Effect for Mode/Assist toggle changes
   useEffect(() => {
     audioEngine.setEnvironment(mode);
-    audioEngine.setBypass(!isAssistOn);
+    audioEngine.setEnabled(isAssistOn);
   }, [mode, isAssistOn]);
 
-  const toggleTestAudio = async () => {
-    if (isTestingAudio) {
-      await audioEngine.stopTestAudio();
-      setIsTestingAudio(false);
-    } else {
-      audioEngine.startTestAudio();
-      setIsTestingAudio(true);
+  // Automatic Earphone Disconnect / Hardware Change Guard
+  useEffect(() => {
+    const handleDeviceChange = async () => {
+      // Whenever headphones/Bluetooth unplug or audio hardware changes
+      if (isAssistOn) {
+        audioEngine.setEnabled(false);
+        setIsAssistOn(false);
+        setDisconnectAlert(
+          'Earphones or Bluetooth audio disconnected! Hearing Assist was automatically paused to prevent loud sounds through your device speakers.'
+        );
+      }
+    };
+
+    if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
     }
-  };
+
+    return () => {
+      if (navigator.mediaDevices && typeof navigator.mediaDevices.removeEventListener === 'function') {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      }
+    };
+  }, [isAssistOn]);
 
   const startVisualizer = () => {
     const canvas = canvasRef.current;
@@ -178,6 +202,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
         </div>
       </nav>
 
+      {/* Safety Alert: Earphones Disconnected */}
+      {disconnectAlert && (
+        <div className="bg-amber-500 text-white px-6 py-3 flex items-center justify-between text-sm font-medium shadow-md transition-all animate-in slide-in-from-top duration-200">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 shrink-0 animate-bounce" />
+            <span>{disconnectAlert}</span>
+          </div>
+          <button 
+            onClick={() => setDisconnectAlert(null)}
+            className="p-1 hover:bg-amber-600 rounded-md transition-colors"
+            title="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col items-center p-6 max-w-md mx-auto w-full gap-8">
         
@@ -190,7 +231,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
             )}
             
             <button
-              onClick={() => setIsAssistOn(!isAssistOn)}
+              onClick={() => {
+                if (disconnectAlert) setDisconnectAlert(null);
+                setIsAssistOn(!isAssistOn);
+              }}
               className={`
                 relative w-32 h-32 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all duration-300
                 ${isAssistOn 
@@ -205,7 +249,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
             </button>
           </div>
           <h2 className={`text-xl font-bold transition-colors ${isAssistOn ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
-            Hearing Assist
+            {isAssistOn ? 'Hearing Assist Active' : 'Hearing Assist Paused'}
           </h2>
         </div>
 
@@ -237,7 +281,32 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
           </div>
         </div>
 
-        {/* 3. Real-time Waveform Indicator */}
+        {/* 3. Master Volume / Amplification Slider */}
+        <div className={`w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-700 transition-opacity duration-300 ${!isAssistOn ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Volume2 className="w-3.5 h-3.5 text-primary-500" /> Master Amplification
+            </span>
+            <span className="text-xs font-mono font-bold text-primary-600 dark:text-primary-400">
+              {Math.round(volume * 100)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0.2"
+            max="2.0"
+            step="0.05"
+            value={volume}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setVolume(val);
+              audioEngine.setMasterVolume(val);
+            }}
+            className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+          />
+        </div>
+
+        {/* 4. Real-time Waveform Indicator */}
         <div className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-700 h-24 relative overflow-hidden">
            <canvas ref={canvasRef} width={400} height={100} className="w-full h-full" />
            {!isAssistOn && (
@@ -247,7 +316,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
            )}
         </div>
 
-        {/* 4. Profile Summary Card */}
+        {/* 5. Microphone Input Source & Sensitivity */}
+        <MicSelector />
+
+        {/* 6. Live Speech Captions */}
+        <LiveCaptions isAudioActive={isAssistOn} />
+
+        {/* 7. Profile Summary Card */}
         <div className="w-full bg-gradient-to-br from-slate-50 to-white dark:from-slate-800 dark:to-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm relative overflow-hidden">
            <div className="absolute top-0 right-0 p-4 opacity-10">
              <Ear className="w-16 h-16 text-slate-900 dark:text-white" />
@@ -257,8 +332,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
              <div className="flex justify-between items-start mb-4">
                <div>
                  <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wide mb-1">Current Profile</h3>
-                 <p className="text-lg font-bold text-slate-900 dark:text-white">Mild Loss Profile</p>
-                 <p className="text-xs text-slate-500">High frequencies boosted.</p>
+                 <p className="text-lg font-bold text-slate-900 dark:text-white">Active Hearing Curve</p>
+                 <p className="text-xs text-slate-500">5-band calibrated profile</p>
                </div>
                <div className="flex items-end gap-1.5 h-12 pb-1">
                  {getProfileBars()}
@@ -266,17 +341,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout, on
              </div>
              
              <div className="grid grid-cols-2 gap-3 mt-4">
-                <Button variant="outline" onClick={onEditProfile} className="text-xs h-10 border-dashed">
-                  <Sliders className="w-3 h-3 mr-2" /> Adjust EQ
-                </Button>
                 <Button 
-                   variant={isTestingAudio ? 'secondary' : 'primary'} 
-                   onClick={toggleTestAudio} 
-                   className="text-xs h-10"
-                   disabled={!isAssistOn}
+                  variant="outline" 
+                  onClick={onRetestHearing} 
+                  className="text-xs h-10 border-primary-500/40 text-primary-600 dark:text-primary-400 font-semibold"
                 >
-                  {isTestingAudio ? <StopCircle className="w-3 h-3 mr-2" /> : <PlayCircle className="w-3 h-3 mr-2" />}
-                  {isTestingAudio ? 'Stop Test' : 'Test Audio'}
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Retest Hearing
+                </Button>
+                <Button variant="outline" onClick={onEditProfile} className="text-xs h-10">
+                  <Sliders className="w-3.5 h-3.5 mr-1.5" /> Fine-tune EQ
                 </Button>
              </div>
            </div>

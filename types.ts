@@ -19,7 +19,14 @@ export interface User {
 
 export type AuthMode = 'LOGIN' | 'SIGNUP';
 
-export type AppView = 'AUTH' | 'SPLASH' | 'PERMISSIONS' | 'SETUP_PROFILE' | 'HOME';
+export type AppView = 'AUTH' | 'SPLASH' | 'PERMISSIONS' | 'SETUP_PROFILE' | 'HOME' | 'HEARING_TEST';
+
+export interface HearingTestResult {
+  frequency: number;
+  thresholdGain: number;
+  lossClassification: 'Normal' | 'Mild' | 'Moderate' | 'Severe';
+  recommendedGain: number;
+}
 
 export type EnvironmentMode = 'QUIET' | 'CONVERSATION' | 'NOISY';
 

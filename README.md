@@ -38,31 +38,41 @@ Switch between intelligent sound modes depending on your surroundings:
 
 ---
 
+###  Real-Time Live Captions (Speech-to-Text)  
+- Browser-native Web Speech API integration (`SpeechRecognition`)  
+- Transcribes nearby conversations into real-time scrolling captions alongside the audio stream  
+- Real-time interim word updates and conversation history with timestamps  
+- Accessibility font resizing, copy-to-clipboard, and full-screen expansion mode  
+
+---
+
 ###  Safety First  
--  Detects earphone disconnection  
--  Automatically pauses playback  
--  Prevents loud audio from playing through speakers  
+- Detects earphone / Bluetooth disconnection via `devicechange`  
+- Automatically pauses audio processing immediately  
+- Prevents loud feedback screeching or amplified noise from playing through speakers  
 ---
 
 ## Installation & Setup  
 
-### Clone the Repository  
+### Clone & Setup
 
 ```bash
-git clone https://github.com/your-username/earvan.git
-cd earvan
+git clone https://github.com/CodeBlunder/EarVan.git
+cd EarVan
 
 # Install Dependencies
-
 npm install
 
 # Configure Environment Variables
+# Create .env from .env.example
 PORT=5000
-MONGO_URI=your_mongodb_connection_string
+MONGO_URI=mongodb://127.0.0.1:27017/earvan
+# or MongoDB Atlas: mongodb+srv://<user>:<password>@cluster0.mongodb.net/earvan
 
-# Run the application
-npm run dev
+# Run both the Backend Server (Express/MongoDB) & Frontend (Vite)
+npm run dev:all
 
-
-npm run build
-npm start
+# Or run separately:
+npm run server   # Starts Express API at http://localhost:5000
+npm run dev      # Starts Vite React UI at http://localhost:3000
+```
