@@ -17,32 +17,22 @@ interface TranscriptEntry {
 }
 
 const SUPPORTED_LANGUAGES = [
-  { code: 'en-US', label: 'English (US)' },
   { code: 'en-IN', label: 'English (India)' },
-  { code: 'en-GB', label: 'English (UK)' },
+  { code: 'en-US', label: 'English (US)' },
   { code: 'hi-IN', label: 'हिन्दी (Hindi)' },
-  { code: 'es-ES', label: 'Español' },
-  { code: 'fr-FR', label: 'Français' },
-  { code: 'de-DE', label: 'Deutsch' },
+  { code: 'kn-IN', label: 'ಕನ್ನಡ (Kannada)' },
 ];
 
 export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => {
-  // Determine best default language based on user's browser locale
+  // Determine best default language prioritizing Indian locale
   const getInitialLang = (): string => {
     const saved = localStorage.getItem('earvan_captions_lang');
     if (saved && SUPPORTED_LANGUAGES.some(l => l.code === saved)) return saved;
-    const browserLang = navigator.language || (navigator as any).userLanguage || 'en-US';
-    if (SUPPORTED_LANGUAGES.some(l => l.code === browserLang)) return browserLang;
-    if (browserLang.startsWith('en')) {
-      if (browserLang.toLowerCase().includes('in')) return 'en-IN';
-      if (browserLang.toLowerCase().includes('gb')) return 'en-GB';
-      return 'en-US';
-    }
+    const browserLang = (navigator.language || (navigator as any).userLanguage || 'en-IN').toLowerCase();
+    if (browserLang.startsWith('kn')) return 'kn-IN';
     if (browserLang.startsWith('hi')) return 'hi-IN';
-    if (browserLang.startsWith('es')) return 'es-ES';
-    if (browserLang.startsWith('fr')) return 'fr-FR';
-    if (browserLang.startsWith('de')) return 'de-DE';
-    return 'en-US';
+    if (browserLang === 'en-us') return 'en-US';
+    return 'en-IN'; // Quality-first default
   };
 
   const [isEnabled, setIsEnabled] = useState<boolean>(() => {
@@ -346,12 +336,31 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
     setIsSimulatingPartner(true);
     window.speechSynthesis.cancel();
 
-    const samplePhrases = [
-      "Hello! I am speaking to you from across the room. Can you hear and read my words clearly?",
-      "Good morning! Everything is ready for our conversation today.",
-      "Earvan's live captions transcribe speech into real-time text alongside your audio."
-    ];
-    const phrase = samplePhrases[Math.floor(Math.random() * samplePhrases.length)];
+    const samplePhrasesByLang: Record<string, string[]> = {
+      'kn-IN': [
+        "ನಮಸ್ಕಾರ! ನೀವು ಮಾತನಾಡುವ ಧ್ವನಿ ಸ್ಪಷ್ಟವಾಗಿ ಕೇಳಿಸುತ್ತಿದೆ.",
+        "ಶುಭ ದಿನ! ಇವತ್ತಿನ ಸಂಭಾಷಣೆಗೆ ಎಲ್ಲವೂ ಸಿದ್ಧವಾಗಿದೆ.",
+        "ನನ್ನ ಮಾತುಗಳು ನಿಮಗೆ ಸ್ಪಷ್ಟವಾಗಿ ಅರ್ಥವಾಗುತ್ತಿವೆಯೇ?"
+      ],
+      'hi-IN': [
+        "नमस्ते! क्या आप मेरी आवाज़ स्पष्ट रूप से सुन और पढ़ पा रहे हैं?",
+        "सुप्रभात! आज का दिन बहुत अच्छा है और हम बातचीत कर रहे हैं।",
+        "ईयरवैन आपके कमरे में बोली जाने वाली बातों को तुरंत स्क्रीन पर लिखता है।"
+      ],
+      'en-IN': [
+        "Hello! I am speaking to you across the room. Can you hear and read my words clearly?",
+        "Good morning! Everything is ready for our conversation today.",
+        "Earvan transcribes nearby speech into real-time text alongside your audio."
+      ],
+      'en-US': [
+        "Hello! I am speaking to you across the room. Can you hear and read my words clearly?",
+        "Good morning! Everything is ready for our conversation today.",
+        "Earvan transcribes nearby speech into real-time text alongside your audio."
+      ]
+    };
+
+    const phraseList = samplePhrasesByLang[selectedLang] || samplePhrasesByLang['en-IN'];
+    const phrase = phraseList[Math.floor(Math.random() * phraseList.length)];
 
     const utterance = new SpeechSynthesisUtterance(phrase);
     utterance.lang = selectedLang;
@@ -540,7 +549,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
           className={`
             p-4 overflow-y-auto space-y-2.5 transition-all
             ${isExpanded ? 'flex-1 max-h-[calc(100vh-140px)]' : 'h-48 max-h-48'}
-            ${fontSize === 'large' ? 'text-lg leading-relaxed' : 'text-sm leading-normal'}
+            ${fontSize === 'large' ? 'text-lg leading-loose' : 'text-sm leading-relaxed'}
           `}
         >
           {history.length === 0 && !interimText && (
