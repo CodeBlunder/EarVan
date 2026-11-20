@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Captions, Trash2, Copy, Check, Volume2, 
   AlertCircle, Maximize2, Minimize2, Sparkles, Languages,
-  PlayCircle, StopCircle, HelpCircle
+  HelpCircle, RefreshCw, Mic, MicOff
 } from 'lucide-react';
+import { audioEngine } from '../services/audioEngine';
 
 interface LiveCaptionsProps {
   isAudioActive: boolean;
@@ -19,35 +20,60 @@ const SUPPORTED_LANGUAGES = [
   { code: 'en-US', label: 'English (US)' },
   { code: 'en-IN', label: 'English (India)' },
   { code: 'en-GB', label: 'English (UK)' },
+  { code: 'hi-IN', label: 'हिन्दी (Hindi)' },
   { code: 'es-ES', label: 'Español' },
   { code: 'fr-FR', label: 'Français' },
   { code: 'de-DE', label: 'Deutsch' },
-  { code: 'hi-IN', label: 'हिन्दी (Hindi)' },
 ];
 
 export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => {
+  // Determine best default language based on user's browser locale
+  const getInitialLang = (): string => {
+    const saved = localStorage.getItem('earvan_captions_lang');
+    if (saved && SUPPORTED_LANGUAGES.some(l => l.code === saved)) return saved;
+    const browserLang = navigator.language || (navigator as any).userLanguage || 'en-US';
+    if (SUPPORTED_LANGUAGES.some(l => l.code === browserLang)) return browserLang;
+    if (browserLang.startsWith('en')) {
+      if (browserLang.toLowerCase().includes('in')) return 'en-IN';
+      if (browserLang.toLowerCase().includes('gb')) return 'en-GB';
+      return 'en-US';
+    }
+    if (browserLang.startsWith('hi')) return 'hi-IN';
+    if (browserLang.startsWith('es')) return 'es-ES';
+    if (browserLang.startsWith('fr')) return 'fr-FR';
+    if (browserLang.startsWith('de')) return 'de-DE';
+    return 'en-US';
+  };
+
   const [isEnabled, setIsEnabled] = useState<boolean>(() => {
-    return localStorage.getItem('earvan_captions_enabled') === 'true';
+    const saved = localStorage.getItem('earvan_captions_enabled');
+    // Default to true so users immediately experience live captions
+    return saved === null ? true : saved === 'true';
   });
-  const [selectedLang, setSelectedLang] = useState<string>('en-US');
+
+  const [selectedLang, setSelectedLang] = useState<string>(getInitialLang);
   const [isSupported, setIsSupported] = useState<boolean>(true);
   const [isListening, setIsListening] = useState<boolean>(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [micActivityLevel, setMicActivityLevel] = useState<number>(0); // 0 to 5 level
+
   const [history, setHistory] = useState<TranscriptEntry[]>([]);
   const [interimText, setInterimText] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [fontSize, setFontSize] = useState<'normal' | 'large'>('normal');
   const [isSimulatingPartner, setIsSimulatingPartner] = useState<boolean>(false);
-  const [showHelpTip, setShowHelpTip] = useState<boolean>(false);
 
   const recognitionRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const restartTimeoutRef = useRef<number | null>(null);
+  const isExplicitlyStoppedRef = useRef<boolean>(false);
+  const animFrameRef = useRef<number | null>(null);
+
   const isEnabledRef = useRef(isEnabled);
   const isAudioActiveRef = useRef(isAudioActive);
   const selectedLangRef = useRef(selectedLang);
 
-  // Keep refs up-to-date for async event listeners
   useEffect(() => {
     isEnabledRef.current = isEnabled;
     localStorage.setItem('earvan_captions_enabled', String(isEnabled));
@@ -59,13 +85,63 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
 
   useEffect(() => {
     selectedLangRef.current = selectedLang;
-    if (recognitionRef.current) {
-      recognitionRef.current.lang = selectedLang;
-    }
   }, [selectedLang]);
 
-  // Initialize SpeechRecognition on mount
+  // Check browser support on mount
   useEffect(() => {
+    const SpeechRecognition = 
+      (window as any).SpeechRecognition || 
+      (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setIsSupported(false);
+    }
+  }, []);
+
+  // Real-time Mic Activity Sound Meter (Reads from audioEngine AnalyserNode)
+  useEffect(() => {
+    if (!isAudioActive) {
+      setMicActivityLevel(0);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      return;
+    }
+
+    const checkLevel = () => {
+      const analyser = audioEngine.getAnalyser();
+      if (analyser) {
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        analyser.getByteFrequencyData(dataArray);
+
+        // Calculate average speech energy in 300Hz - 3400Hz frequency range
+        let sum = 0;
+        const sampleCount = Math.min(bufferLength, 32);
+        for (let i = 1; i < sampleCount; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / (sampleCount - 1);
+        
+        // Map 0-120 to 0-5 visual bars
+        let level = 0;
+        if (avg > 10) level = 1;
+        if (avg > 25) level = 2;
+        if (avg > 45) level = 3;
+        if (avg > 70) level = 4;
+        if (avg > 95) level = 5;
+        setMicActivityLevel(level);
+      }
+      animFrameRef.current = requestAnimationFrame(checkLevel);
+    };
+
+    animFrameRef.current = requestAnimationFrame(checkLevel);
+
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [isAudioActive]);
+
+  // Clean, robust SpeechRecognition runner
+  const startRecognition = () => {
     const SpeechRecognition = 
       (window as any).SpeechRecognition || 
       (window as any).webkitSpeechRecognition;
@@ -75,14 +151,28 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
       return;
     }
 
+    // Terminate existing instance if any
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.abort();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+
     try {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = selectedLangRef.current;
+      recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
         setIsListening(true);
+        setErrorMsg(null);
       };
 
       recognition.onresult = (event: any) => {
@@ -90,8 +180,10 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
         const newFinalEntries: TranscriptEntry[] = [];
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcriptChunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
+          const result = event.results[i];
+          const transcriptChunk = result[0]?.transcript || '';
+          
+          if (result.isFinal) {
             if (transcriptChunk.trim()) {
               newFinalEntries.push({
                 id: crypto.randomUUID(),
@@ -105,64 +197,120 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
         }
 
         if (newFinalEntries.length > 0) {
-          setHistory(prev => [...prev.slice(-40), ...newFinalEntries]);
+          setHistory(prev => [...prev.slice(-50), ...newFinalEntries]);
         }
         setInterimText(currentInterim);
       };
 
       recognition.onerror = (event: any) => {
-        if (event.error !== 'no-speech') {
-          console.warn('[LiveCaptions] Speech error:', event.error);
+        const err = event.error;
+        console.warn('[LiveCaptions] Speech error:', err);
+
+        if (err === 'no-speech') {
+          // Normal silence timeout in Chromium; do not treat as fatal error
+          return;
+        }
+
+        if (err === 'not-allowed') {
+          setErrorMsg('Microphone blocked by browser. Click the lock/settings icon in your address bar to allow microphone.');
+        } else if (err === 'network') {
+          setErrorMsg('Browser speech service offline. Check internet connection (Chrome/Edge Speech requires network).');
+        } else if (err === 'audio-capture') {
+          setErrorMsg('No microphone detected or mic is locked by another program.');
+        } else if (err === 'language-not-supported') {
+          setErrorMsg(`Language "${selectedLangRef.current}" is not supported by your browser's speech model.`);
+        } else if (err !== 'aborted') {
+          setErrorMsg(`Speech recognition paused: ${err}`);
         }
       };
 
       recognition.onend = () => {
         setIsListening(false);
-        // Browser speech engines auto-stop on silence; auto-restart if still enabled
-        if (isEnabledRef.current && isAudioActiveRef.current) {
+
+        // Auto-restart if still enabled and not manually stopped
+        if (isEnabledRef.current && isAudioActiveRef.current && !isExplicitlyStoppedRef.current) {
+          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
           restartTimeoutRef.current = window.setTimeout(() => {
-            try {
-              recognition.start();
-            } catch (e) {}
-          }, 350);
+            if (isEnabledRef.current && isAudioActiveRef.current && !isExplicitlyStoppedRef.current) {
+              startRecognition();
+            }
+          }, 300);
         }
       };
 
       recognitionRef.current = recognition;
-    } catch (e) {
-      console.error('[LiveCaptions] Failed to setup SpeechRecognition:', e);
-      setIsSupported(false);
+      recognition.start();
+    } catch (err: any) {
+      console.error('[LiveCaptions] Failed to start recognition:', err);
+      if (err.name === 'InvalidStateError') {
+        // Recognition already transitioning; retry shortly
+        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = window.setTimeout(() => {
+          if (isEnabledRef.current && isAudioActiveRef.current) {
+            startRecognition();
+          }
+        }, 500);
+      } else {
+        setErrorMsg('Could not start speech recognition: ' + (err.message || 'Error'));
+      }
+    }
+  };
+
+  const stopRecognition = () => {
+    isExplicitlyStoppedRef.current = true;
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {}
+    }
+    setIsListening(false);
+    setInterimText('');
+  };
+
+  // Manage start/stop triggers based on isEnabled and isAudioActive
+  useEffect(() => {
+    if (!isSupported) return;
+
+    if (isEnabled && isAudioActive) {
+      isExplicitlyStoppedRef.current = false;
+      startRecognition();
+    } else {
+      stopRecognition();
     }
 
     return () => {
-      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.stop();
-        } catch (e) {}
-      }
+      stopRecognition();
     };
-  }, []);
+  }, [isEnabled, isAudioActive, isSupported]);
 
-  // Control speech recognition start/stop based on isEnabled and isAudioActive
-  useEffect(() => {
-    const recognition = recognitionRef.current;
-    if (!recognition || !isSupported) return;
+  // Language Change: cleanly restart recognition with newly selected language model
+  const handleLanguageChange = (newLang: string) => {
+    setSelectedLang(newLang);
+    selectedLangRef.current = newLang;
+    localStorage.setItem('earvan_captions_lang', newLang);
 
     if (isEnabled && isAudioActive) {
-      try {
-        recognition.start();
-      } catch (e) {
-        // May already be active
-      }
-    } else {
-      try {
-        recognition.stop();
-        setIsListening(false);
-        setInterimText('');
-      } catch (e) {}
+      stopRecognition();
+      setTimeout(() => {
+        isExplicitlyStoppedRef.current = false;
+        startRecognition();
+      }, 200);
     }
-  }, [isEnabled, isAudioActive, isSupported]);
+  };
+
+  // Manual Jumpstart / Retry
+  const handleManualRestart = () => {
+    setErrorMsg(null);
+    stopRecognition();
+    setTimeout(() => {
+      isExplicitlyStoppedRef.current = false;
+      startRecognition();
+    }, 200);
+  };
 
   // Auto-scroll to latest captions
   useEffect(() => {
@@ -199,9 +347,9 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
     window.speechSynthesis.cancel();
 
     const samplePhrases = [
-      "Hello there! I am your conversation partner sitting across the table. Can you read and hear my words clearly?",
-      "Good morning! The weather is fantastic today and our meeting starts in five minutes.",
-      "Could you please pass me the documents when you have a moment?"
+      "Hello! I am speaking to you from across the room. Can you hear and read my words clearly?",
+      "Good morning! Everything is ready for our conversation today.",
+      "Earvan's live captions transcribe speech into real-time text alongside your audio."
     ];
     const phrase = samplePhrases[Math.floor(Math.random() * samplePhrases.length)];
 
@@ -219,7 +367,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
     return (
       <div className="w-full bg-slate-100 dark:bg-slate-800/80 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2">
         <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-        <span>Live Captions requires Chrome, Edge, or a browser with Web Speech API support.</span>
+        <span>Live Captions requires Google Chrome, Microsoft Edge, or a browser with Web Speech API support.</span>
       </div>
     );
   }
@@ -235,8 +383,8 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
         <div className="flex items-center gap-2.5">
           <div className={`
             p-2 rounded-xl transition-colors
-            ${isEnabled && isAudioActive
-              ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-600 dark:text-primary-400' 
+            ${isEnabled && isAudioActive && isListening
+              ? 'bg-green-100 dark:bg-green-900/40 text-green-600 dark:text-green-400' 
               : 'bg-slate-100 dark:bg-slate-700 text-slate-400'}
           `}>
             <Captions className="w-4 h-4" />
@@ -246,16 +394,51 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
               <h3 className="font-bold text-sm text-slate-900 dark:text-white leading-tight">
                 Live Speech Captions
               </h3>
+              
+              {/* Dynamic Status Badge */}
               {isEnabled && isAudioActive && (
-                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-ping"></span>
-                  Transcribing
-                </span>
+                isListening ? (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-ping"></span>
+                    Listening
+                  </span>
+                ) : (
+                  <button 
+                    onClick={handleManualRestart}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200"
+                    title="Click to reconnect speech recognizer"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Reconnecting...
+                  </button>
+                )
               )}
             </div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Real-time speech-to-text transcription
-            </p>
+
+            {/* Subtitle with live sound detection meter */}
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                Speech-to-text
+              </span>
+              
+              {/* Real-time Mic VU Audio Level Meter */}
+              {isAudioActive && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-[10px]" title="Microphone sound activity in the room">
+                  <Mic className="w-2.5 h-2.5 text-slate-400" />
+                  <div className="flex items-end gap-0.5 h-2.5">
+                    {[1, 2, 3, 4, 5].map(barIdx => (
+                      <div
+                        key={barIdx}
+                        className={`w-0.5 rounded-full transition-all duration-75 ${
+                          micActivityLevel >= barIdx 
+                            ? barIdx >= 4 ? 'h-2.5 bg-amber-500' : 'h-2 bg-green-500' 
+                            : 'h-1 bg-slate-300 dark:bg-slate-600'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
@@ -266,9 +449,9 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
               {/* Language Selector */}
               <select
                 value={selectedLang}
-                onChange={(e) => setSelectedLang(e.target.value)}
-                className="text-xs bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-2 py-1 text-slate-700 dark:text-slate-200 focus:outline-none"
-                title="Select Spoken Language"
+                onChange={(e) => handleLanguageChange(e.target.value)}
+                className="text-xs bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-2 py-1 text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
+                title="Select Spoken Language / Accent Model"
               >
                 {SUPPORTED_LANGUAGES.map(lang => (
                   <option key={lang.code} value={lang.code}>{lang.label}</option>
@@ -282,6 +465,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
               >
                 {fontSize === 'normal' ? 'A+' : 'A-'}
               </button>
+
               {history.length > 0 && (
                 <>
                   <button
@@ -300,6 +484,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
                   </button>
                 </>
               )}
+
               <button
                 onClick={() => setIsExpanded(!isExpanded)}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
@@ -332,6 +517,22 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
         </div>
       </div>
 
+      {/* Error / Diagnostic Alert Banner */}
+      {errorMsg && isEnabled && (
+        <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <AlertCircle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            onClick={handleManualRestart}
+            className="px-2 py-0.5 rounded bg-amber-200 dark:bg-amber-800 text-amber-900 dark:text-white font-semibold text-[11px] hover:bg-amber-300 shrink-0 flex items-center gap-1"
+          >
+            <RefreshCw className="w-3 h-3" /> Retry
+          </button>
+        </div>
+      )}
+
       {/* Captions Body / Transcript View */}
       {isEnabled ? (
         <div 
@@ -346,7 +547,11 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
             <div className="h-full flex flex-col items-center justify-center text-center p-4 text-slate-400 dark:text-slate-500 space-y-2">
               <Captions className="w-7 h-7 opacity-40" />
               <p className="font-medium text-xs">
-                {isAudioActive ? 'Listening for speech in the room...' : 'Turn on Hearing Assist to start transcribing.'}
+                {!isAudioActive 
+                  ? 'Turn on Hearing Assist above to start transcribing.' 
+                  : isListening 
+                    ? `Listening in ${SUPPORTED_LANGUAGES.find(l => l.code === selectedLang)?.label || selectedLang}... Speak or play audio.`
+                    : 'Starting speech recognizer...'}
               </p>
               
               {/* Simulate Partner Button for Solo Testing */}
@@ -357,7 +562,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
                   className="mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-primary-50 dark:bg-primary-900/40 text-primary-600 dark:text-primary-300 border border-primary-200 dark:border-primary-800 hover:bg-primary-100 transition-colors shadow-sm"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
-                  {isSimulatingPartner ? 'Partner is speaking...' : 'Test Conversation Partner Voice'}
+                  {isSimulatingPartner ? 'Partner speaking...' : 'Test Speech Recognition with Voice'}
                 </button>
               )}
             </div>
@@ -400,7 +605,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
           <div className="flex items-center gap-1.5 truncate">
             <HelpCircle className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <span className="truncate">
-              Mic listens to room audio. For video clips, play through speakers or phone.
+              Room voices quiet? Increase <strong>Mic Sensitivity</strong> in the selector above.
             </span>
           </div>
           {history.length > 0 && isAudioActive && (
@@ -409,7 +614,7 @@ export const LiveCaptions: React.FC<LiveCaptionsProps> = ({ isAudioActive }) => 
               disabled={isSimulatingPartner}
               className="ml-2 text-primary-600 dark:text-primary-400 font-medium hover:underline shrink-0"
             >
-              {isSimulatingPartner ? 'Speaking...' : 'Test Partner Voice'}
+              {isSimulatingPartner ? 'Speaking...' : 'Test Voice'}
             </button>
           )}
         </div>
