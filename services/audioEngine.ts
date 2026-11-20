@@ -3,7 +3,7 @@ import { HearingProfile, EnvironmentMode, normalizeProfile, BandGains } from "..
 export class AudioEngine {
   private context: AudioContext | null = null;
   private stream: MediaStream | null = null;
-  
+
   // Nodes
   private micSource: MediaStreamAudioSourceNode | null = null;
   private testSource: AudioBufferSourceNode | null = null;
@@ -21,7 +21,7 @@ export class AudioEngine {
   private leftGainNode: GainNode | null = null;
   private rightGainNode: GainNode | null = null;
   private mergerNode: ChannelMergerNode | null = null;
-  
+
   // State
   private currentProfile: HearingProfile | null = null;
   private currentMode: EnvironmentMode = 'QUIET';
@@ -31,14 +31,14 @@ export class AudioEngine {
   private masterVolume: number = 1.0;
   private micSensitivity: number = 1.2;
   private selectedDeviceId: string | null = null;
-  
+
   private readonly frequencies: (keyof BandGains)[] = [500, 1000, 2000, 4000, 8000];
 
   public async initialize(): Promise<void> {
     if (this.context) return; // Already initialized
 
     this.context = new (window.AudioContext || (window as any).webkitAudioContext)();
-    
+
     // Core Processing Chain Nodes
     this.preGainNode = this.context.createGain();
     this.preGainNode.gain.value = this.micSensitivity;
@@ -87,10 +87,10 @@ export class AudioEngine {
 
   private async useMicrophone() {
     if (!this.context) return;
-    
+
     // Stop test source if playing
     if (this.testSource) {
-      try { this.testSource.stop(); } catch(e) {}
+      try { this.testSource.stop(); } catch (e) { }
       this.testSource.disconnect();
       this.testSource = null;
     }
@@ -129,27 +129,27 @@ export class AudioEngine {
     const bufferSize = 2 * this.context.sampleRate;
     const buffer = this.context.createBuffer(1, bufferSize, this.context.sampleRate);
     const output = buffer.getChannelData(0);
-    
+
     // Pink noise generation
     let b0, b1, b2, b3, b4, b5, b6;
     b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
     for (let i = 0; i < bufferSize; i++) {
-        const white = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + white * 0.0555179;
-        b1 = 0.99332 * b1 + white * 0.0750759;
-        b2 = 0.96900 * b2 + white * 0.1538520;
-        b3 = 0.86650 * b3 + white * 0.3104856;
-        b4 = 0.55000 * b4 + white * 0.5329522;
-        b5 = -0.7616 * b5 - white * 0.0168980;
-        output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
-        output[i] *= 0.11; // Lower volume
-        b6 = white * 0.115926;
+      const white = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.96900 * b2 + white * 0.1538520;
+      b3 = 0.86650 * b3 + white * 0.3104856;
+      b4 = 0.55000 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.0168980;
+      output[i] = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+      output[i] *= 0.11; // Lower volume
+      b6 = white * 0.115926;
     }
 
     this.testSource = this.context.createBufferSource();
     this.testSource.buffer = buffer;
     this.testSource.loop = true;
-    
+
     this.connectChain(this.testSource);
     this.testSource.start();
   }
@@ -284,11 +284,11 @@ export class AudioEngine {
         this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
         this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, this.context.currentTime);
         this.gainNode.gain.linearRampToValueAtTime(0, this.context.currentTime + 0.03);
-      } catch (e) {}
+      } catch (e) { }
 
       // Stop any test audio if it was running
       if (this.testSource) {
-        try { this.testSource.stop(); } catch(e) {}
+        try { this.testSource.stop(); } catch (e) { }
         this.testSource = null;
         this.isTesting = false;
       }
@@ -299,7 +299,7 @@ export class AudioEngine {
         this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
         this.gainNode.gain.setValueAtTime(0, this.context.currentTime);
         this.gainNode.gain.linearRampToValueAtTime(this.masterVolume, this.context.currentTime + 0.08);
-      } catch (e) {}
+      } catch (e) { }
       this.applySettings();
     }
   }
@@ -385,7 +385,7 @@ export class AudioEngine {
       try {
         this.gainNode.gain.cancelScheduledValues(this.context.currentTime);
         this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
-      } catch (e) {}
+      } catch (e) { }
     }
   }
 
@@ -421,7 +421,7 @@ export class AudioEngine {
     if (this.micSource) {
       try {
         this.micSource.disconnect();
-      } catch (e) {}
+      } catch (e) { }
     }
 
     const osc = ctx.createOscillator();
@@ -466,7 +466,7 @@ export class AudioEngine {
       try {
         this.toneGain.gain.setValueAtTime(this.toneGain.gain.value, this.context.currentTime);
         this.toneGain.gain.exponentialRampToValueAtTime(0.0001, this.context.currentTime + 0.05);
-      } catch (e) {}
+      } catch (e) { }
     }
     if (this.toneOsc) {
       try {
@@ -475,15 +475,15 @@ export class AudioEngine {
           try {
             osc.stop();
             osc.disconnect();
-          } catch (e) {}
+          } catch (e) { }
         }, 60);
-      } catch (e) {}
+      } catch (e) { }
       this.toneOsc = null;
     }
     if (this.tonePanner) {
       try {
         this.tonePanner.disconnect();
-      } catch (e) {}
+      } catch (e) { }
       this.tonePanner = null;
     }
     this.toneGain = null;
