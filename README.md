@@ -14,9 +14,10 @@ Users can create personalized hearing profiles, and the application applies **re
 
 ## Features  
 
-###  Personalized Hearing Profiles  
-- Create and save custom hearing profiles  
-- Fine-tune audio frequencies based on individual hearing needs  
+### 🎧 Binaural Hearing Profiles & Pure-Tone Audiometry  
+- Independent Left and Right ear calibration and EQ filter banks  
+- Interactive 5-frequency pure-tone hearing test with stereo panning  
+- Fine-tune ear balance (Left ⟷ Right) and frequency bands  
 - Profiles stored securely using MongoDB  
 
 ---
@@ -25,31 +26,23 @@ Users can create personalized hearing profiles, and the application applies **re
 
 Switch between intelligent sound modes depending on your surroundings:
 
--  **Quiet Mode** – Subtle amplification for silent environments  
--  **Conversation Mode** – Enhances speech clarity  
--  **Noisy/Street Mode** – Reduces background noise while preserving important sounds  
+- **Quiet Mode** – Subtle amplification for silent environments  
+- **Conversation Mode** – Enhances speech clarity  
+- **Noisy/Street Mode** – Reduces background noise while preserving important sounds  
 
 ---
 
-###  Real-Time Audio Processing  
--  Built using the Web Audio API  
--  Live gain control and frequency filtering  
--  Minimal latency for smooth listening experience  
+### ⚡ Real-Time Audio Processing  
+- Built using the Web Audio API with dual channel splitting and merging  
+- Live gain control, multi-band peaking filters, and dynamics compression  
+- Minimal latency (~10ms) for smooth, natural listening experience  
 
 ---
 
-###  Real-Time Live Captions (Speech-to-Text)  
-- Browser-native Web Speech API integration (`SpeechRecognition`)  
-- Transcribes nearby conversations into real-time scrolling captions alongside the audio stream  
-- Real-time interim word updates and conversation history with timestamps  
-- Accessibility font resizing, copy-to-clipboard, and full-screen expansion mode  
-
----
-
-###  Safety First  
+### 🛡️ Safety First  
 - Detects earphone / Bluetooth disconnection via `devicechange`  
 - Automatically pauses audio processing immediately  
-- Prevents loud feedback screeching or amplified noise from playing through speakers  
+- Dynamics compressor limiter prevents loud feedback screeching or sudden high acoustic shocks  
 ---
 
 ## Installation & Setup  

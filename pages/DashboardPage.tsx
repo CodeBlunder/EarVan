@@ -4,7 +4,6 @@ import { audioEngine } from '../services/audioEngine';
 import { authService } from '../services/authService';
 import { Button } from '../components/Button';
 import { ThemeToggle } from '../components/ThemeToggle';
-import { LiveCaptions } from '../components/LiveCaptions';
 import { MicSelector } from '../components/MicSelector';
 import { 
   LogOut, Activity, Power, Mic, Waves, 
@@ -363,10 +362,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         {/* 5. Microphone Input Source & Sensitivity */}
         <MicSelector />
 
-        {/* 6. Live Speech Captions */}
-        <LiveCaptions isAudioActive={isAssistOn} />
-
-        {/* 7. Binaural Profile Summary Card */}
+        {/* 6. Binaural Profile Summary Card */}
         <div className="w-full bg-gradient-to-br from-slate-50 to-white dark:from-slate-800 dark:to-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm relative overflow-hidden">
            <div className="absolute top-0 right-0 p-4 opacity-10">
              <Ear className="w-16 h-16 text-slate-900 dark:text-white" />
