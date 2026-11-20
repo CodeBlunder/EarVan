@@ -1,4 +1,4 @@
-import { HearingProfile, EnvironmentMode } from "../types";
+import { HearingProfile, EnvironmentMode, normalizeProfile, BandGains } from "../types";
 
 export class AudioEngine {
   private context: AudioContext | null = null;
@@ -9,11 +9,18 @@ export class AudioEngine {
   private testSource: AudioBufferSourceNode | null = null;
   private toneOsc: OscillatorNode | null = null;
   private toneGain: GainNode | null = null;
+  private tonePanner: StereoPannerNode | null = null;
   private preGainNode: GainNode | null = null;
   private gainNode: GainNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
   private analyser: AnalyserNode | null = null;
-  private filters: BiquadFilterNode[] = [];
+
+  // Binaural Filter Chains & Routing
+  private leftFilters: BiquadFilterNode[] = [];
+  private rightFilters: BiquadFilterNode[] = [];
+  private leftGainNode: GainNode | null = null;
+  private rightGainNode: GainNode | null = null;
+  private mergerNode: ChannelMergerNode | null = null;
   
   // State
   private currentProfile: HearingProfile | null = null;
@@ -25,7 +32,7 @@ export class AudioEngine {
   private micSensitivity: number = 1.2;
   private selectedDeviceId: string | null = null;
   
-  private readonly frequencies = [500, 1000, 2000, 4000, 8000];
+  private readonly frequencies: (keyof BandGains)[] = [500, 1000, 2000, 4000, 8000];
 
   public async initialize(): Promise<void> {
     if (this.context) return; // Already initialized
@@ -39,6 +46,11 @@ export class AudioEngine {
     this.compressor = this.context.createDynamicsCompressor();
     this.analyser = this.context.createAnalyser();
 
+    // Binaural Routing Nodes
+    this.leftGainNode = this.context.createGain();
+    this.rightGainNode = this.context.createGain();
+    this.mergerNode = this.context.createChannelMerger(2);
+
     // Compressor Defaults (Hearing Protection)
     this.compressor.threshold.value = -20;
     this.compressor.knee.value = 40;
@@ -50,8 +62,17 @@ export class AudioEngine {
     this.analyser.fftSize = 256;
     this.analyser.smoothingTimeConstant = 0.5;
 
-    // Initialize Filter Bank (disconnected initially)
-    this.filters = this.frequencies.map(freq => {
+    // Initialize Left and Right Filter Banks
+    this.leftFilters = this.frequencies.map(freq => {
+      const filter = this.context!.createBiquadFilter();
+      filter.type = 'peaking';
+      filter.frequency.value = freq;
+      filter.Q.value = 1.0;
+      filter.gain.value = 0;
+      return filter;
+    });
+
+    this.rightFilters = this.frequencies.map(freq => {
       const filter = this.context!.createBiquadFilter();
       filter.type = 'peaking';
       filter.frequency.value = freq;
@@ -145,38 +166,58 @@ export class AudioEngine {
   }
 
   private connectChain(sourceNode: AudioNode) {
-    if (!this.context) return;
+    if (!this.context || !this.leftGainNode || !this.rightGainNode || !this.mergerNode) return;
 
-    // Disconnect everything first to be safe
+    // Disconnect everything first to avoid duplicate connections
     sourceNode.disconnect();
     if (this.preGainNode) this.preGainNode.disconnect();
-    this.filters.forEach(f => f.disconnect());
+    this.leftFilters.forEach(f => f.disconnect());
+    this.rightFilters.forEach(f => f.disconnect());
+    this.leftGainNode.disconnect();
+    this.rightGainNode.disconnect();
+    this.mergerNode.disconnect();
     this.compressor!.disconnect();
     this.gainNode!.disconnect();
     this.analyser!.disconnect();
 
-    // 0. Pre-Gain Sensitivity Booster (for picking up distant room audio)
+    // 0. Pre-Gain Sensitivity Booster
     if (this.preGainNode) {
       sourceNode.connect(this.preGainNode);
     }
-    let currentNode: AudioNode = this.preGainNode || sourceNode;
+    const currentNode: AudioNode = this.preGainNode || sourceNode;
 
-    // 1. Filter Chain
-    this.filters.forEach(filter => {
-      currentNode.connect(filter);
-      currentNode = filter;
+    // 1. Parallel Left Ear Filter Chain
+    let leftCurrent: AudioNode = currentNode;
+    this.leftFilters.forEach(filter => {
+      leftCurrent.connect(filter);
+      leftCurrent = filter;
     });
+    leftCurrent.connect(this.leftGainNode);
 
-    // 2. Compressor
-    currentNode.connect(this.compressor!);
+    // 2. Parallel Right Ear Filter Chain
+    let rightCurrent: AudioNode = currentNode;
+    this.rightFilters.forEach(filter => {
+      rightCurrent.connect(filter);
+      rightCurrent = filter;
+    });
+    rightCurrent.connect(this.rightGainNode);
 
-    // 3. Master Gain
+    // 3. Channel Merger: Combine into Stereo Headphones
+    // Left Channel -> Channel 0
+    this.leftGainNode.connect(this.mergerNode, 0, 0);
+    // Right Channel -> Channel 1
+    this.rightGainNode.connect(this.mergerNode, 0, 1);
+
+    // 4. Stereo Dynamics Compressor (Hearing Protection)
+    this.mergerNode.connect(this.compressor!);
+
+    // 5. Master Gain
     this.compressor!.connect(this.gainNode!);
 
-    // 4. Analyser
+    // 6. Analyser
     this.gainNode!.connect(this.analyser!);
 
-    // 5. Output
+    // 7. Headphone Destination
     this.analyser!.connect(this.context.destination);
   }
 
@@ -212,7 +253,17 @@ export class AudioEngine {
   }
 
   public setProfile(profile: HearingProfile) {
-    this.currentProfile = profile;
+    this.currentProfile = normalizeProfile(profile);
+    this.applySettings();
+  }
+
+  public getProfile(): HearingProfile | null {
+    return this.currentProfile;
+  }
+
+  public setBalance(balance: number) {
+    if (!this.currentProfile) return;
+    this.currentProfile.balance = Math.max(-1, Math.min(balance, 1));
     this.applySettings();
   }
 
@@ -260,46 +311,72 @@ export class AudioEngine {
   private applySettings() {
     if (!this.context || !this.currentProfile) return;
 
-    // Base Gains from Profile
-    const baseGains = { ...this.currentProfile.eqBands };
+    // Normalised Profile Gains
+    const leftGains = { ...this.currentProfile.leftEar };
+    const rightGains = { ...this.currentProfile.rightEar };
 
-    // Apply Environment Offsets
-    // This logic implements the specific hearing requirements
+    // Apply Environment Offsets to both ears
     if (!this.isBypassed) {
       switch (this.currentMode) {
         case 'CONVERSATION':
-          // Boost Speech (1k-4k), Cut Rumbe (500), Cut Hiss (8k)
-          // Helping user listen to only the person's audio in crowded area
-          baseGains[500] -= 5; 
-          baseGains[1000] += 4;
-          baseGains[2000] += 6;
-          baseGains[4000] += 4;
-          baseGains[8000] -= 2;
-          this.compressor!.threshold.value = -30; // Aggressive compression for consistent volume
+          // Boost Speech (1k-4k), Cut Rumble (500), Cut Hiss (8k)
+          [leftGains, rightGains].forEach(g => {
+            g[500] -= 5;
+            g[1000] += 4;
+            g[2000] += 6;
+            g[4000] += 4;
+            g[8000] -= 2;
+          });
+          this.compressor!.threshold.value = -30;
           break;
         case 'NOISY':
-          // Cut background noise aggressively
-          baseGains[500] -= 10;
-          baseGains[1000] += 2;
-          baseGains[2000] += 5; // Focus on clarity
-          baseGains[8000] -= 5; // Cut high pitch noise
-          this.compressor!.threshold.value = -15; 
+          // Cut background rumble and high hiss aggressively
+          [leftGains, rightGains].forEach(g => {
+            g[500] -= 10;
+            g[1000] += 2;
+            g[2000] += 5;
+            g[8000] -= 5;
+          });
+          this.compressor!.threshold.value = -15;
           break;
         case 'QUIET':
         default:
-          // True to profile
           this.compressor!.threshold.value = -20;
           break;
       }
     }
 
-    // Apply to nodes
-    this.filters.forEach(filter => {
-      const freq = filter.frequency.value as keyof HearingProfile['eqBands'];
-      // If bypassed, gain is 0 (flat), otherwise Profile + Environment Mode
-      const targetGain = this.isBypassed ? 0 : (baseGains[freq] || 0);
+    // Apply to Left Filters
+    this.leftFilters.forEach(filter => {
+      const freq = filter.frequency.value as keyof BandGains;
+      const targetGain = this.isBypassed ? 0 : (leftGains[freq] || 0);
       filter.gain.setTargetAtTime(targetGain, this.context!.currentTime, 0.2);
     });
+
+    // Apply to Right Filters
+    this.rightFilters.forEach(filter => {
+      const freq = filter.frequency.value as keyof BandGains;
+      const targetGain = this.isBypassed ? 0 : (rightGains[freq] || 0);
+      filter.gain.setTargetAtTime(targetGain, this.context!.currentTime, 0.2);
+    });
+
+    // Apply Balance Gains
+    if (this.leftGainNode && this.rightGainNode) {
+      const balance = this.currentProfile.balance ?? 0;
+      let leftMultiplier = 1.0;
+      let rightMultiplier = 1.0;
+
+      if (balance < 0) {
+        // Shift towards Left ear, soften Right
+        rightMultiplier = Math.max(0, 1.0 + balance);
+      } else if (balance > 0) {
+        // Shift towards Right ear, soften Left
+        leftMultiplier = Math.max(0, 1.0 - balance);
+      }
+
+      this.leftGainNode.gain.setTargetAtTime(leftMultiplier, this.context.currentTime, 0.05);
+      this.rightGainNode.gain.setTargetAtTime(rightMultiplier, this.context.currentTime, 0.05);
+    }
   }
 
   public setMasterVolume(value: number) {
@@ -330,7 +407,13 @@ export class AudioEngine {
     return this.context;
   }
 
-  public async startTone(frequency: number, initialVolume: number = 0.005): Promise<void> {
+  /**
+   * Generates a calibrated pure tone for hearing tests.
+   * @param frequency Tone frequency in Hz
+   * @param initialVolume Starting gain (faint)
+   * @param pan Stereo panning: -1.0 for Left Ear only, +1.0 for Right Ear only, 0.0 for Both
+   */
+  public async startTone(frequency: number, initialVolume: number = 0.005, pan: number = 0): Promise<void> {
     const ctx = await this.ensureContext();
     this.stopTone();
 
@@ -353,7 +436,18 @@ export class AudioEngine {
     gain.gain.exponentialRampToValueAtTime(safeInitial, ctx.currentTime + 0.05);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+
+    // Stereo Panner routing for ear-specific testing
+    if (typeof ctx.createStereoPanner === 'function') {
+      const panner = ctx.createStereoPanner();
+      panner.pan.setValueAtTime(pan, ctx.currentTime);
+      gain.connect(panner);
+      panner.connect(ctx.destination);
+      this.tonePanner = panner;
+    } else {
+      // Fallback if browser doesn't support StereoPanner
+      gain.connect(ctx.destination);
+    }
 
     osc.start();
     this.toneOsc = osc;
@@ -385,6 +479,12 @@ export class AudioEngine {
         }, 60);
       } catch (e) {}
       this.toneOsc = null;
+    }
+    if (this.tonePanner) {
+      try {
+        this.tonePanner.disconnect();
+      } catch (e) {}
+      this.tonePanner = null;
     }
     this.toneGain = null;
   }

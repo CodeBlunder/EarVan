@@ -1,4 +1,4 @@
-import { User, DatabaseSchema, HearingProfile } from '../types';
+import { User, DatabaseSchema, HearingProfile, normalizeProfile } from '../types';
 
 const DB_KEY = 'earvan_db_v1';
 const SESSION_KEY = 'earvan_session_v1';
@@ -118,18 +118,19 @@ export const authService = {
   },
 
   updateProfile: async (userId: string, profile: HearingProfile): Promise<User> => {
+    const normalizedProfile = normalizeProfile(profile);
     try {
       // 1. Save directly to MongoDB database
       const res = await fetch(`/api/user/profile/${encodeURIComponent(userId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile })
+        body: JSON.stringify({ profile: normalizedProfile })
       });
 
       if (res.ok) {
         const updatedUser: User = await res.json();
         localStorage.setItem(SESSION_KEY, JSON.stringify(updatedUser));
-        console.log('[Earvan] Hearing profile successfully saved to MongoDB database.');
+        console.log('[Earvan] Binaural hearing profile successfully saved to MongoDB database.');
         return updatedUser;
       }
     } catch (err) {
@@ -141,15 +142,15 @@ export const authService = {
     const userIndex = db.users.findIndex(u => u.id === userId);
     
     if (userIndex !== -1) {
-      db.users[userIndex].profile = profile;
+      db.users[userIndex].profile = normalizedProfile;
       saveLocalDB(db);
     }
 
     // Always update current session cache
     const currentSession = authService.getCurrentUser();
     const updatedUser: User = currentSession 
-      ? { ...currentSession, profile } 
-      : { id: userId, name: 'User', email: '', username: '', profile };
+      ? { ...currentSession, profile: normalizedProfile } 
+      : { id: userId, name: 'User', email: '', username: '', profile: normalizedProfile };
       
     localStorage.setItem(SESSION_KEY, JSON.stringify(updatedUser));
     return updatedUser;

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { User, HearingProfile, EnvironmentMode } from '../types';
+import { User, HearingProfile, EnvironmentMode, normalizeProfile, BandGains } from '../types';
 import { audioEngine } from '../services/audioEngine';
 import { authService } from '../services/authService';
 import { Button } from '../components/Button';
@@ -10,7 +10,7 @@ import {
   LogOut, Activity, Power, Mic, Waves, 
   MessageCircle, CloudRain, Zap, 
   Sliders, Ear, Volume2, Sparkles,
-  Headphones, AlertTriangle, X
+  Headphones, AlertTriangle, X, Scale
 } from 'lucide-react';
 
 interface DashboardPageProps {
@@ -36,6 +36,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [disconnectAlert, setDisconnectAlert] = useState<string | null>(null);
 
+  const normalizedProfile = normalizeProfile(user.profile);
+  const [balance, setBalance] = useState<number>(normalizedProfile.balance ?? 0);
+
   useEffect(() => {
     const initAudio = async () => {
       if (!audioEngine.isRunning()) {
@@ -46,9 +49,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         }
       }
       
-      if (user.profile) {
-        audioEngine.setProfile(user.profile);
-      }
+      audioEngine.setProfile(normalizedProfile);
       
       // Initial State Sync
       audioEngine.setEnvironment(mode);
@@ -61,7 +62,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
     return () => {
       cancelAnimationFrame(animationRef.current);
-      // Ensure audio stops when component unmounts (e.g. logout or navigation)
       audioEngine.stop();
     };
   }, [user]);
@@ -72,10 +72,9 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     audioEngine.setEnabled(isAssistOn);
   }, [mode, isAssistOn]);
 
-  // Automatic Earphone Disconnect / Hardware Change Guard
+  // Automatic Earphone Disconnect Guard
   useEffect(() => {
     const handleDeviceChange = async () => {
-      // Whenever headphones/Bluetooth unplug or audio hardware changes
       if (isAssistOn) {
         audioEngine.setEnabled(false);
         setIsAssistOn(false);
@@ -96,6 +95,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     };
   }, [isAssistOn]);
 
+  const handleBalanceChange = (newBal: number) => {
+    setBalance(newBal);
+    audioEngine.setBalance(newBal);
+    if (user.profile) {
+      const updated = { ...user.profile, balance: newBal };
+      authService.updateProfile(user.id, updated).catch(() => {});
+    }
+  };
+
   const startVisualizer = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -113,7 +121,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       ctx.clearRect(0, 0, w, h);
 
       if (!analyser || !isAssistOn) {
-        // Flat line if off
         ctx.beginPath();
         ctx.moveTo(0, h/2);
         ctx.lineTo(w, h/2);
@@ -160,23 +167,33 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     return `${base} bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-primary-400 dark:hover:border-primary-500`;
   };
 
-  // Generate a simple bar graph for the profile card
+  // Generate dual-ear mini bar visualizer for the profile card
   const getProfileBars = () => {
-    if (!user.profile) return null;
-    const bands = user.profile.eqBands;
+    const frequencies: (keyof BandGains)[] = [500, 1000, 2000, 4000, 8000];
+    const leftBands = normalizedProfile.leftEar;
+    const rightBands = normalizedProfile.rightEar;
     
-    return [500, 1000, 2000, 4000, 8000].map((f) => {
-      const val = bands[f as keyof HearingProfile['eqBands']];
-      const h = Math.max(20, 20 + (val * 2)); // min height + value
-      const isBoosted = val > 0;
+    return frequencies.map((f) => {
+      const lVal = leftBands[f] || 0;
+      const rVal = rightBands[f] || 0;
+      const lHeight = Math.max(16, 20 + lVal * 2.2);
+      const rHeight = Math.max(16, 20 + rVal * 2.2);
       
       return (
-        <div key={f} className="flex flex-col items-center gap-1 group">
-          <div className="relative w-2 bg-slate-100 dark:bg-slate-700 rounded-full h-12 flex items-end overflow-hidden">
+        <div key={f} className="flex items-end gap-0.5 group" title={`${f}Hz: Left ${lVal}dB | Right ${rVal}dB`}>
+          {/* Left Ear Bar (Blue) */}
+          <div className="w-1.5 bg-slate-200 dark:bg-slate-700 rounded-full h-12 flex items-end overflow-hidden">
             <div 
-              style={{ height: `${(h/44)*100}%` }} 
-              className={`w-full rounded-full transition-all duration-500 ${isBoosted ? 'bg-secondary-500' : 'bg-slate-300 dark:bg-slate-600'}`}
-            ></div>
+              style={{ height: `${(lHeight / 48) * 100}%` }} 
+              className={`w-full rounded-full transition-all duration-500 ${lVal > 0 ? 'bg-blue-500' : 'bg-slate-400 dark:bg-slate-600'}`}
+            />
+          </div>
+          {/* Right Ear Bar (Rose) */}
+          <div className="w-1.5 bg-slate-200 dark:bg-slate-700 rounded-full h-12 flex items-end overflow-hidden">
+            <div 
+              style={{ height: `${(rHeight / 48) * 100}%` }} 
+              className={`w-full rounded-full transition-all duration-500 ${rVal > 0 ? 'bg-rose-500' : 'bg-slate-400 dark:bg-slate-600'}`}
+            />
           </div>
         </div>
       );
@@ -220,12 +237,11 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       )}
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col items-center p-6 max-w-md mx-auto w-full gap-8">
+      <main className="flex-1 flex flex-col items-center p-6 max-w-md mx-auto w-full gap-7">
         
-        {/* 1. Big Toggle Button */}
-        <div className="flex flex-col items-center gap-4 mt-4">
+        {/* 1. Big Power / Toggle Button */}
+        <div className="flex flex-col items-center gap-4 mt-2">
           <div className="relative">
-            {/* Pulsing ring when active */}
             {isAssistOn && (
               <div className="absolute inset-0 bg-green-500 rounded-full blur-xl opacity-20 animate-pulse"></div>
             )}
@@ -249,7 +265,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             </button>
           </div>
           <h2 className={`text-xl font-bold transition-colors ${isAssistOn ? 'text-green-600 dark:text-green-400' : 'text-slate-400'}`}>
-            {isAssistOn ? 'Hearing Assist Active' : 'Hearing Assist Paused'}
+            {isAssistOn ? 'Binaural Assist Active' : 'Hearing Assist Paused'}
           </h2>
         </div>
 
@@ -281,33 +297,61 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
         </div>
 
-        {/* 3. Master Volume / Amplification Slider */}
-        <div className={`w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-700 transition-opacity duration-300 ${!isAssistOn ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-              <Volume2 className="w-3.5 h-3.5 text-primary-500" /> Master Amplification
-            </span>
-            <span className="text-xs font-mono font-bold text-primary-600 dark:text-primary-400">
-              {Math.round(volume * 100)}%
-            </span>
+        {/* 3. Amplification & Stereo Balance Card */}
+        <div className={`w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200 dark:border-slate-700 space-y-4 transition-opacity duration-300 ${!isAssistOn ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
+          {/* Master Volume */}
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Volume2 className="w-3.5 h-3.5 text-primary-500" /> Master Amplification
+              </span>
+              <span className="text-xs font-mono font-bold text-primary-600 dark:text-primary-400">
+                {Math.round(volume * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0.2"
+              max="2.0"
+              step="0.05"
+              value={volume}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                setVolume(val);
+                audioEngine.setMasterVolume(val);
+              }}
+              className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+            />
           </div>
-          <input
-            type="range"
-            min="0.2"
-            max="2.0"
-            step="0.05"
-            value={volume}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              setVolume(val);
-              audioEngine.setMasterVolume(val);
-            }}
-            className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
-          />
+
+          {/* Quick Stereo Balance */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-700">
+            <div className="flex justify-between items-center mb-1.5">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Scale className="w-3.5 h-3.5 text-primary-500" /> Stereo Balance
+              </span>
+              <span className="text-xs font-mono font-bold text-slate-600 dark:text-slate-300">
+                {balance === 0 ? 'Center' : balance < 0 ? `L ${Math.abs(Math.round(balance * 100))}%` : `R ${Math.round(balance * 100)}%`}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold text-blue-600 uppercase">L</span>
+              <input
+                type="range"
+                min="-1"
+                max="1"
+                step="0.05"
+                value={balance}
+                onChange={(e) => handleBalanceChange(Number(e.target.value))}
+                className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+              />
+              <span className="text-[10px] font-bold text-rose-600 uppercase">R</span>
+            </div>
+          </div>
         </div>
 
-        {/* 4. Real-time Waveform Indicator */}
-        <div className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-100 dark:border-slate-700 h-24 relative overflow-hidden">
+        {/* 4. Real-time Waveform Visualizer */}
+        <div className="w-full bg-white dark:bg-slate-800 rounded-2xl p-4 shadow-sm border border-slate-200 dark:border-slate-700 h-24 relative overflow-hidden">
            <canvas ref={canvasRef} width={400} height={100} className="w-full h-full" />
            {!isAssistOn && (
              <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-slate-800/50 backdrop-blur-[1px]">
@@ -322,7 +366,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         {/* 6. Live Speech Captions */}
         <LiveCaptions isAudioActive={isAssistOn} />
 
-        {/* 7. Profile Summary Card */}
+        {/* 7. Binaural Profile Summary Card */}
         <div className="w-full bg-gradient-to-br from-slate-50 to-white dark:from-slate-800 dark:to-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm relative overflow-hidden">
            <div className="absolute top-0 right-0 p-4 opacity-10">
              <Ear className="w-16 h-16 text-slate-900 dark:text-white" />
@@ -331,9 +375,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
            <div className="relative z-10">
              <div className="flex justify-between items-start mb-4">
                <div>
-                 <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wide mb-1">Current Profile</h3>
-                 <p className="text-lg font-bold text-slate-900 dark:text-white">Active Hearing Curve</p>
-                 <p className="text-xs text-slate-500">5-band calibrated profile</p>
+                 <div className="flex items-center gap-2 mb-1">
+                   <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wide">Binaural Profile</h3>
+                   <span className="flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400">
+                     <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span> L
+                   </span>
+                   <span className="flex items-center gap-1 text-[10px] font-bold text-rose-600 dark:text-rose-400">
+                     <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span> R
+                   </span>
+                 </div>
+                 <p className="text-lg font-bold text-slate-900 dark:text-white">Active Hearing Curves</p>
+                 <p className="text-xs text-slate-500">Dual 5-band calibrated channels</p>
                </div>
                <div className="flex items-end gap-1.5 h-12 pb-1">
                  {getProfileBars()}
@@ -346,7 +398,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   onClick={onRetestHearing} 
                   className="text-xs h-10 border-primary-500/40 text-primary-600 dark:text-primary-400 font-semibold"
                 >
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Retest Hearing
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5" /> Retest Both Ears
                 </Button>
                 <Button variant="outline" onClick={onEditProfile} className="text-xs h-10">
                   <Sliders className="w-3.5 h-3.5 mr-1.5" /> Fine-tune EQ

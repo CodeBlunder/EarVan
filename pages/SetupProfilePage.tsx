@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { HearingProfile, User } from '../types';
+import { HearingProfile, User, BandGains, normalizeProfile, DEFAULT_BINAURAL_PROFILE } from '../types';
 import { Button } from '../components/Button';
 import { audioEngine } from '../services/audioEngine';
 import { authService } from '../services/authService';
 import { ThemeToggle } from '../components/ThemeToggle';
-import { Play, Sliders, CheckCircle2, Volume2, Sparkles, Ear } from 'lucide-react';
+import { 
+  Play, Sliders, CheckCircle2, Volume2, Sparkles, Ear, 
+  Link2, Unlink2, Headphones, Scale
+} from 'lucide-react';
 
 interface SetupProfilePageProps {
   user: User;
@@ -13,9 +16,15 @@ interface SetupProfilePageProps {
   initialProfile?: HearingProfile;
 }
 
-const DEFAULT_PROFILE: HearingProfile = {
-  eqBands: { 500: 0, 1000: 0, 2000: 0, 4000: 0, 8000: 0 }
-};
+type EarTab = 'BOTH' | 'LEFT' | 'RIGHT';
+
+const FREQUENCY_BANDS: { freq: keyof BandGains; label: string; desc: string }[] = [
+  { freq: 500, label: "Warmth & Body", desc: "Low bass, environmental fullness" },
+  { freq: 1000, label: "Speech Core", desc: "Vowels, main human voice energy" },
+  { freq: 2000, label: "Speech Clarity", desc: "Consonant crispness & separation" },
+  { freq: 4000, label: "Presence", desc: "Definition, closeness (s, th, f sounds)" },
+  { freq: 8000, label: "Air & Treble", desc: "High details, brilliance, high pitch" },
+];
 
 export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({ 
   user, 
@@ -26,14 +35,20 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
   const [mode, setMode] = useState<'SELECT' | 'CUSTOMIZE'>(initialProfile ? 'CUSTOMIZE' : 'SELECT');
   const [isAudioActive, setIsAudioActive] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [profile, setProfile] = useState<HearingProfile>(initialProfile || user.profile || DEFAULT_PROFILE);
   
-  // Ref to track if we mounted audio
+  // Normalized binaural profile state
+  const [profile, setProfile] = useState<HearingProfile>(() => {
+    return normalizeProfile(initialProfile || user.profile || DEFAULT_BINAURAL_PROFILE);
+  });
+
+  const [activeTab, setActiveTab] = useState<EarTab>('BOTH');
+  const [isLinked, setIsLinked] = useState<boolean>(profile.isLinked ?? true);
+  const [balance, setBalance] = useState<number>(profile.balance ?? 0);
+
   const audioInitialized = useRef(false);
 
   useEffect(() => {
     return () => {
-      // Cleanup audio when leaving page if we started it here
       audioEngine.stop();
     };
   }, []);
@@ -41,48 +56,99 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
   const handleQuickStart = async () => {
     setIsSaving(true);
     try {
-      await authService.updateProfile(user.id, DEFAULT_PROFILE);
+      await authService.updateProfile(user.id, DEFAULT_BINAURAL_PROFILE);
+      audioEngine.setProfile(DEFAULT_BINAURAL_PROFILE);
       onComplete();
     } catch (e) {
       console.error(e);
+      setIsSaving(false);
     }
   };
 
   const startCustomization = async () => {
     try {
       await audioEngine.initialize();
-      // Start with default profile
-      audioEngine.setProfile(DEFAULT_PROFILE);
+      audioEngine.setProfile(profile);
       audioEngine.setMasterVolume(1.0);
       setIsAudioActive(true);
       audioInitialized.current = true;
       setMode('CUSTOMIZE');
     } catch (err) {
       console.error("Failed to start audio engine", err);
-      alert("Could not start audio. Please ensure permissions are granted.");
+      alert("Could not start audio. Please ensure microphone permissions are granted.");
     }
   };
 
-  const handleSliderChange = (freq: keyof HearingProfile['eqBands'], value: number) => {
-    const newProfile = {
+  const handleSliderChange = (freq: keyof BandGains, value: number, targetEar: 'LEFT' | 'RIGHT' | 'BOTH') => {
+    const updatedLeft = { ...profile.leftEar };
+    const updatedRight = { ...profile.rightEar };
+
+    if (targetEar === 'BOTH' || isLinked) {
+      updatedLeft[freq] = value;
+      updatedRight[freq] = value;
+    } else if (targetEar === 'LEFT') {
+      updatedLeft[freq] = value;
+    } else if (targetEar === 'RIGHT') {
+      updatedRight[freq] = value;
+    }
+
+    const newProfile: HearingProfile = {
       ...profile,
-      eqBands: {
-        ...profile.eqBands,
-        [freq]: value
-      }
+      leftEar: updatedLeft,
+      rightEar: updatedRight,
+      eqBands: { ...updatedLeft },
+      balance,
+      isLinked
     };
+
     setProfile(newProfile);
-    
-    // Real-time update
+
+    // Immediate real-time audio update in headphones
     if (isAudioActive) {
       audioEngine.setProfile(newProfile);
+    }
+  };
+
+  const handleBalanceChange = (newBalance: number) => {
+    setBalance(newBalance);
+    const newProfile: HearingProfile = {
+      ...profile,
+      balance: newBalance,
+      isLinked
+    };
+    setProfile(newProfile);
+    if (isAudioActive) {
+      audioEngine.setProfile(newProfile);
+    }
+  };
+
+  const toggleLinked = () => {
+    const nextLinked = !isLinked;
+    setIsLinked(nextLinked);
+    if (nextLinked) {
+      // Sync right ear to match left ear when re-linking
+      const syncedProfile: HearingProfile = {
+        ...profile,
+        rightEar: { ...profile.leftEar },
+        isLinked: true
+      };
+      setProfile(syncedProfile);
+      if (isAudioActive) audioEngine.setProfile(syncedProfile);
+    } else {
+      setProfile(prev => ({ ...prev, isLinked: false }));
     }
   };
 
   const handleSaveProfile = async () => {
     setIsSaving(true);
     try {
-      await authService.updateProfile(user.id, profile);
+      const finalProfile: HearingProfile = {
+        ...profile,
+        balance,
+        isLinked
+      };
+      await authService.updateProfile(user.id, finalProfile);
+      audioEngine.setProfile(finalProfile);
       onComplete();
     } catch (e) {
       console.error(e);
@@ -100,7 +166,7 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
           <div className="text-center mb-12">
             <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-4">Set Up Your Hearing Profile</h1>
             <p className="text-slate-600 dark:text-slate-300 text-xl max-w-2xl mx-auto">
-              We can use a standard enhancement profile or you can customize the audio to match your specific hearing needs.
+              Earvan supports independent <strong>Left & Right ear compensation</strong> for tailored hearing assistance.
             </p>
           </div>
 
@@ -120,10 +186,10 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">
-                      Interactive Hearing Test
+                      Binaural Hearing Test
                     </h3>
                     <p className="text-slate-600 dark:text-slate-300 max-w-xl text-sm leading-relaxed">
-                      Take our 2-minute pure-tone audiometry test. Earvan will automatically measure your sensitivity across 5 frequency bands and calibrate your personalized EQ curve.
+                      Take our 2-minute pure-tone test. Earvan measures your Left and Right ear sensitivity separately to build an accurate binaural profile.
                     </p>
                   </div>
                 </div>
@@ -148,7 +214,7 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Quick Start</h3>
                 <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
-                  Use our standard balanced profile optimized for everyday speech and conversation.
+                  Use our standard balanced profile optimized for everyday speech and balanced across both ears.
                 </p>
                 <Button variant="outline" onClick={handleQuickStart} fullWidth isLoading={isSaving}>
                   Use Default Profile
@@ -162,10 +228,10 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
                 </div>
                 <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Manual Tuning</h3>
                 <p className="text-slate-500 dark:text-slate-400 mb-6 text-sm">
-                  Manually adjust each frequency slider while listening to live audio feedback.
+                  Manually adjust Left & Right ear frequency bands and stereo balance with live audio feedback.
                 </p>
                 <Button variant="secondary" onClick={startCustomization} fullWidth>
-                  Open Slider Tuning
+                  Open Binaural Sliders
                 </Button>
               </div>
             </div>
@@ -175,77 +241,212 @@ export const SetupProfilePage: React.FC<SetupProfilePageProps> = ({
     );
   }
 
-  // Customization UI
-  const bands = [
-    { freq: 500, label: "Warmth & Body", desc: "Low frequencies, fullness" },
-    { freq: 1000, label: "Speech Core", desc: "Vowels, main energy" },
-    { freq: 2000, label: "Clarity", desc: "Consonants clarity" },
-    { freq: 4000, label: "Presence", desc: "Definition, closeness" },
-    { freq: 8000, label: "Detail & Air", desc: "High details, crispness" },
-  ];
-
+  // CUSTOMIZE MODE (LIVE BINAURAL TUNING)
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-900 flex flex-col transition-colors duration-300">
-      <div className="bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 p-4 sticky top-0 z-10 shadow-sm transition-colors duration-300">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col transition-colors duration-300">
+      {/* Sticky Header */}
+      <div className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 p-4 sticky top-0 z-10 shadow-sm transition-colors duration-300">
         <div className="max-w-3xl mx-auto flex justify-between items-center">
-          <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-            <Volume2 className="w-5 h-5 text-secondary-600 dark:text-secondary-400" />
-            Live Tuning
-          </h2>
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-primary-100 dark:bg-primary-900/40 text-primary-600 dark:text-primary-400 rounded-xl">
+              <Headphones className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-slate-800 dark:text-white leading-tight">
+                Live Binaural Tuning
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Left & Right ear frequency calibration
+              </p>
+            </div>
+          </div>
           <div className="flex items-center gap-4">
-             <div className="text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1 rounded-full flex items-center gap-1 animate-pulse">
+             <div className="text-xs font-semibold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-3 py-1 rounded-full flex items-center gap-1.5 animate-pulse">
                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-               Audio Active
+               Live Audio Feedback
              </div>
              <ThemeToggle />
           </div>
         </div>
       </div>
 
-      <div className="flex-1 p-6 max-w-3xl mx-auto w-full">
-        <div className="mb-8 text-center">
-          <p className="text-slate-600 dark:text-slate-300">
-            Adjust the sliders below. Listen to your surroundings or your own voice as you move them.
-          </p>
+      <div className="flex-1 p-6 max-w-3xl mx-auto w-full space-y-6">
+        {/* Ear Navigation Tabs & Link Toggle */}
+        <div className="bg-white dark:bg-slate-800 p-3 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-xl w-full sm:w-auto">
+            <button
+              onClick={() => setActiveTab('BOTH')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+                activeTab === 'BOTH'
+                  ? 'bg-white dark:bg-slate-800 text-primary-600 dark:text-primary-400 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
+              }`}
+            >
+              Both Ears
+            </button>
+            <button
+              onClick={() => setActiveTab('LEFT')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                activeTab === 'LEFT'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-blue-600 dark:text-blue-400 hover:text-blue-700'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-blue-400"></span> Left Ear (L)
+            </button>
+            <button
+              onClick={() => setActiveTab('RIGHT')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                activeTab === 'RIGHT'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-rose-600 dark:text-rose-400 hover:text-rose-700'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-400"></span> Right Ear (R)
+            </button>
+          </div>
+
+          {/* Link / Unlink Toggle */}
+          <button
+            onClick={toggleLinked}
+            className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
+              isLinked
+                ? 'bg-primary-50 dark:bg-primary-950/40 border-primary-200 dark:border-primary-800 text-primary-700 dark:text-primary-300'
+                : 'bg-slate-100 dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300'
+            }`}
+            title="When linked, sliders update both ears simultaneously"
+          >
+            {isLinked ? <Link2 className="w-3.5 h-3.5" /> : <Unlink2 className="w-3.5 h-3.5" />}
+            {isLinked ? 'Linked (Both Move)' : 'Independent Ears'}
+          </button>
         </div>
 
-        <div className="space-y-6">
-          {bands.map((band) => (
-            <div key={band.freq} className="bg-slate-50 dark:bg-slate-800 p-5 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors duration-300">
-              <div className="flex justify-between items-end mb-4">
-                <div>
-                  <h4 className="font-bold text-slate-800 dark:text-white text-lg">{band.label}</h4>
-                  <p className="text-xs text-slate-400 dark:text-slate-500 font-medium tracking-wide uppercase">{band.freq} Hz • {band.desc}</p>
+        {/* Stereo Balance Slider Card */}
+        <div className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-3">
+          <div className="flex justify-between items-center text-xs">
+            <span className="font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+              <Scale className="w-3.5 h-3.5 text-primary-500" />
+              Earphone Stereo Balance
+            </span>
+            <span className="font-mono font-bold text-primary-600 dark:text-primary-400">
+              {balance === 0 ? 'Center (0%)' : balance < 0 ? `Left ${Math.abs(Math.round(balance * 100))}%` : `Right ${Math.round(balance * 100)}%`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase w-12 text-left">Left</span>
+            <input
+              type="range"
+              min="-1"
+              max="1"
+              step="0.05"
+              value={balance}
+              onChange={(e) => handleBalanceChange(Number(e.target.value))}
+              className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-primary-600"
+            />
+            <span className="text-xs font-bold text-rose-600 dark:text-rose-400 uppercase w-12 text-right">Right</span>
+          </div>
+        </div>
+
+        {/* Frequency Sliders */}
+        <div className="space-y-4">
+          {FREQUENCY_BANDS.map((band) => {
+            const leftVal = profile.leftEar[band.freq] ?? 0;
+            const rightVal = profile.rightEar[band.freq] ?? 0;
+
+            return (
+              <div 
+                key={band.freq} 
+                className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm space-y-3 transition-colors"
+              >
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h4 className="font-bold text-slate-800 dark:text-white text-base leading-tight">
+                      {band.label}
+                    </h4>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 font-medium">
+                      {band.freq >= 1000 ? `${band.freq / 1000} kHz` : `${band.freq} Hz`} • {band.desc}
+                    </p>
+                  </div>
+
+                  {/* Badges showing current values */}
+                  <div className="flex items-center gap-2 font-mono text-xs font-bold">
+                    {(activeTab === 'BOTH' || activeTab === 'LEFT') && (
+                      <span className="px-2 py-1 rounded-md bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                        L: {leftVal > 0 ? `+${leftVal}` : leftVal} dB
+                      </span>
+                    )}
+                    {(activeTab === 'BOTH' || activeTab === 'RIGHT') && (
+                      <span className="px-2 py-1 rounded-md bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                        R: {rightVal > 0 ? `+${rightVal}` : rightVal} dB
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="text-secondary-600 dark:text-secondary-400 font-mono font-bold">
-                  {profile.eqBands[band.freq as keyof HearingProfile['eqBands']] > 0 ? '+' : ''}
-                  {profile.eqBands[band.freq as keyof HearingProfile['eqBands']]} dB
-                </div>
+
+                {/* Slider: Both or Left Ear */}
+                {(activeTab === 'BOTH' || activeTab === 'LEFT') && (
+                  <div className="space-y-1">
+                    {activeTab === 'BOTH' && !isLinked && (
+                      <span className="text-[10px] font-bold text-blue-600 uppercase">Left Ear</span>
+                    )}
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-semibold text-slate-400 w-12 text-right">-12dB</span>
+                      <input
+                        type="range"
+                        min="-12"
+                        max="12"
+                        step="1"
+                        value={leftVal}
+                        onChange={(e) => handleSliderChange(band.freq, Number(e.target.value), activeTab === 'BOTH' ? 'BOTH' : 'LEFT')}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      />
+                      <span className="text-[11px] font-semibold text-slate-400 w-12 text-left">+12dB</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Slider: Right Ear (only if Independent/Both, or Right Tab) */}
+                {((activeTab === 'BOTH' && !isLinked) || activeTab === 'RIGHT') && (
+                  <div className="space-y-1 pt-1 border-t border-slate-100 dark:border-slate-700/50">
+                    <span className="text-[10px] font-bold text-rose-600 uppercase">Right Ear</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-semibold text-slate-400 w-12 text-right">-12dB</span>
+                      <input
+                        type="range"
+                        min="-12"
+                        max="12"
+                        step="1"
+                        value={rightVal}
+                        onChange={(e) => handleSliderChange(band.freq, Number(e.target.value), 'RIGHT')}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-rose-600"
+                      />
+                      <span className="text-[11px] font-semibold text-slate-400 w-12 text-left">+12dB</span>
+                    </div>
+                  </div>
+                )}
               </div>
-              
-              <div className="flex items-center gap-4">
-                <span className="text-xs font-semibold text-slate-400 uppercase w-16 text-right">Hear Less</span>
-                <input
-                  type="range"
-                  min="-12"
-                  max="12"
-                  step="1"
-                  value={profile.eqBands[band.freq as keyof HearingProfile['eqBands']]}
-                  onChange={(e) => handleSliderChange(band.freq as any, Number(e.target.value))}
-                  className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-secondary-600"
-                />
-                <span className="text-xs font-semibold text-slate-400 uppercase w-16">Hear More</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-white dark:bg-slate-800 sticky bottom-0 transition-colors duration-300">
-        <div className="max-w-3xl mx-auto">
-          <Button onClick={handleSaveProfile} fullWidth isLoading={isSaving} className="text-lg py-4">
+      {/* Sticky Bottom Bar */}
+      <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 sticky bottom-0 transition-colors duration-300">
+        <div className="max-w-3xl mx-auto flex items-center justify-between gap-4">
+          <Button 
+            variant="outline" 
+            onClick={() => setMode('SELECT')}
+          >
+            Back
+          </Button>
+          <Button 
+            onClick={handleSaveProfile} 
+            isLoading={isSaving} 
+            className="flex-1 text-base py-3 font-semibold shadow-md shadow-primary-500/20"
+          >
             <CheckCircle2 className="w-5 h-5 mr-2" />
-            Save Profile & Finish
+            Save Binaural Profile
           </Button>
         </div>
       </div>

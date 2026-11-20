@@ -15,14 +15,22 @@ app.use(express.json());
 // ----------------------
 // MongoDB Schemas & Model
 // ----------------------
+const BandGainsSchema = {
+  500: { type: Number, default: 0 },
+  1000: { type: Number, default: 0 },
+  2000: { type: Number, default: 0 },
+  4000: { type: Number, default: 0 },
+  8000: { type: Number, default: 0 }
+};
+
 const HearingProfileSchema = new mongoose.Schema({
-  eqBands: {
-    500: { type: Number, default: 0 },
-    1000: { type: Number, default: 0 },
-    2000: { type: Number, default: 0 },
-    4000: { type: Number, default: 0 },
-    8000: { type: Number, default: 0 }
-  },
+  // Legacy flat eqBands
+  eqBands: { ...BandGainsSchema },
+  // Binaural independent EQ bands
+  leftEar: { ...BandGainsSchema },
+  rightEar: { ...BandGainsSchema },
+  balance: { type: Number, default: 0 },
+  isLinked: { type: Boolean, default: true },
   updatedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
@@ -123,8 +131,8 @@ app.put('/api/user/profile/:userId', async (req, res) => {
     const { userId } = req.params;
     const { profile } = req.body;
 
-    if (!profile || !profile.eqBands) {
-      return res.status(400).json({ error: 'Invalid profile format. eqBands is required.' });
+    if (!profile || (!profile.eqBands && !profile.leftEar && !profile.rightEar)) {
+      return res.status(400).json({ error: 'Invalid profile format. Hearing bands required.' });
     }
 
     const user = await User.findById(userId);
@@ -132,19 +140,29 @@ app.put('/api/user/profile/:userId', async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    const extractBands = (bands) => ({
+      500: Number(bands?.[500] || 0),
+      1000: Number(bands?.[1000] || 0),
+      2000: Number(bands?.[2000] || 0),
+      4000: Number(bands?.[4000] || 0),
+      8000: Number(bands?.[8000] || 0),
+    });
+
+    const fallbackBands = extractBands(profile.eqBands || profile.leftEar || profile.rightEar);
+    const leftEar = profile.leftEar ? extractBands(profile.leftEar) : fallbackBands;
+    const rightEar = profile.rightEar ? extractBands(profile.rightEar) : fallbackBands;
+
     user.profile = {
-      eqBands: {
-        500: Number(profile.eqBands[500] || 0),
-        1000: Number(profile.eqBands[1000] || 0),
-        2000: Number(profile.eqBands[2000] || 0),
-        4000: Number(profile.eqBands[4000] || 0),
-        8000: Number(profile.eqBands[8000] || 0),
-      },
+      eqBands: fallbackBands,
+      leftEar,
+      rightEar,
+      balance: typeof profile.balance === 'number' ? profile.balance : 0,
+      isLinked: profile.isLinked !== undefined ? profile.isLinked : true,
       updatedAt: new Date()
     };
 
     await user.save();
-    console.log(`[MongoDB] Successfully updated hearing profile for user: ${user.username}`);
+    console.log(`[MongoDB] Successfully updated binaural hearing profile for user: ${user.username}`);
     return res.json(user.toSafeObject());
   } catch (err) {
     console.error('Profile update error:', err);
